@@ -971,6 +971,7 @@ public class PopConsumerService extends ServiceThread {
      */
     public CompletableFuture<Boolean> revive(PopConsumerRecord record) {
         return this.getMessageAsync(record)
+            // 与 thenApply 对比，thenApply 连接一个同步方法，thenCompose 连接一个异步方法
             .thenCompose(result -> {
                 if (result == null) {
                     log.error("PopConsumerService revive error, message may be lost, record={}", record);
