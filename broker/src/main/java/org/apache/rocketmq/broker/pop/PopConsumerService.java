@@ -942,7 +942,7 @@ public class PopConsumerService extends ServiceThread {
      * PopConsumerService.revive() -> getMessageAsync(record) -> EscapeBridge.getMessageAsync()
      *
      * @param consumerRecord Pop消费记录
-     * @return Triple<MessageExt, String, Boolean> 消息内容、broker名称、是否需要重试
+     * @return Triple<MessageExt, info, needRetry>, check info and retry if and only if MessageExt is null
      */
     public CompletableFuture<Triple<MessageExt, String, Boolean>> getMessageAsync(PopConsumerRecord consumerRecord) {
         return this.brokerController.getEscapeBridge().getMessageAsync(consumerRecord.getTopicId(),
@@ -978,7 +978,7 @@ public class PopConsumerService extends ServiceThread {
                     return CompletableFuture.completedFuture(false);
                 }
 
-                // triple中的right为true表示获取消息需要重试
+                // Triple<MessageExt, info, needRetry>, check info and retry if and only if MessageExt is null
                 if (result.getLeft() == null) {
                     log.info("PopConsumerService revive no need retry, record={}", record);
                     return CompletableFuture.completedFuture(!result.getRight());
@@ -1048,6 +1048,7 @@ public class PopConsumerService extends ServiceThread {
 
         // 扫描过期记录，从上次扫描位置开始
         // 【扫描范围】[currentTime - 3秒, upperTime]
+        // Async_question: 为什么这里拿的是 PopConsumerRecord，而不是直接拿 Triple<MessageExt, String, Boolean>
         List<PopConsumerRecord> consumerRecords = this.popConsumerStore.scanExpiredRecords(
             currentTime.get() - TimeUnit.SECONDS.toMillis(3), upperTime, maxCount);
         long scanCostTime = stopwatch.elapsed(TimeUnit.MILLISECONDS);
@@ -1059,8 +1060,8 @@ public class PopConsumerService extends ServiceThread {
         // 这里可以合并读取操作来优化性能
         // 【并发处理】为每个记录创建异步恢复任务
         for (PopConsumerRecord record : consumerRecords) {
-            futureList.add(this.revive(record).thenAccept(result -> {
-                if (!result) {
+            futureList.add(this.revive(record).thenAccept(result -> { // 返回 false 表示需要重试
+                if (!result) { // 重试
                     // 恢复失败，根据重试次数决定处理策略
                     if (record.getAttemptTimes() < brokerConfig.getPopReviveMaxAttemptTimes()) {
                         // 使用指数退避算法计算下次重试时间
