@@ -1263,7 +1263,7 @@ public class PopMessageProcessor implements NettyRequestProcessor {
             return true;
         }
 
-        // 如果添加失败，尝试只添加偏移量
+        // 如果添加失败，创建一条定时消息，进入磁盘
         return this.popBufferMergeService.addCkJustOffset(
             ck, reviveQid, -1, getMessageTmpResult.getNextBeginOffset()
         );
