@@ -336,7 +336,6 @@ public class PopMessageProcessor implements NettyRequestProcessor {
         final long beginTimeMills = this.brokerController.getMessageStore().now();
 
         // 填充消息诞生时间到扩展字段（如果不存在的话）
-        // 这里的注释问为什么需要这个？是为了跟踪请求的生命周期
         request.addExtFieldIfNotExist(BORN_TIME, String.valueOf(System.currentTimeMillis()));
         if (Objects.equals(request.getExtFields().get(BORN_TIME), "0")) {
             request.addExtField(BORN_TIME, String.valueOf(System.currentTimeMillis()));
