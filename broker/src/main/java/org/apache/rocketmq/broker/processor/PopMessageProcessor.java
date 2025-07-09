@@ -333,7 +333,7 @@ public class PopMessageProcessor implements NettyRequestProcessor {
     @Override
     public RemotingCommand processRequest(final ChannelHandlerContext ctx, RemotingCommand request)
         throws RemotingCommandException {
-        final long beginTimeMills = this.brokerController.getMessageStore().now();
+        final long beginTimeMills = this.brokerController.getMessageStore().now(); // 时间戳
 
         // 填充消息诞生时间到扩展字段（如果不存在的话）
         request.addExtFieldIfNotExist(BORN_TIME, String.valueOf(System.currentTimeMillis()));

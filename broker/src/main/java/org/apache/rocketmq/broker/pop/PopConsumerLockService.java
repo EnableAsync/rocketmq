@@ -119,7 +119,7 @@ public class PopConsumerLockService {
      * @return true表示获取锁成功，false表示锁已被其他线程持有
      */
     public boolean tryLock(String groupId, String topicId) {
-        // 构建锁键，使用@分隔符连接groupId和topicId
+        // 构建锁键，使用@分隔符连接groupId和topicId，是新版的锁
         String lockKey = groupId + PopAckConstants.SPLIT + topicId;
 
         // 使用computeIfAbsent原子操作：

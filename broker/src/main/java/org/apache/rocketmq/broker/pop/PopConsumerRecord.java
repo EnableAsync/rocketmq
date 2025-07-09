@@ -59,7 +59,7 @@ public class PopConsumerRecord {
     private int retryFlag;
 
     @JSONField(ordinal = 5)
-    private long invisibleTime;
+    private long invisibleTime; // 什么时候进重试
 
     @JSONField(ordinal = 6)
     private long offset;
@@ -94,6 +94,7 @@ public class PopConsumerRecord {
 
     /**
      * Key: timestamp(8) + groupId + topicId + queueId + offset
+     * rocksdb 的 key，第一个是什么时候进重试的时间
      */
     @JSONField(serialize = false)
     public byte[] getKeyBytes() {

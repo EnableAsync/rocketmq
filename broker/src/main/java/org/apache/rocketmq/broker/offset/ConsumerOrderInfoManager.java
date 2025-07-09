@@ -183,7 +183,7 @@ public class ConsumerOrderInfoManager extends ConfigManager {
 
         qs.put(queueId, orderInfo);
 
-        // 构建订单信息返回给客户端
+        // 构建顺序信息返回给客户端
         Map<Long, Integer> offsetConsumedCount = orderInfo.offsetConsumedCount;
         int minConsumedTimes = Integer.MAX_VALUE;
 
@@ -535,7 +535,7 @@ public class ConsumerOrderInfoManager extends ConfigManager {
     }
 
     /**
-     * 订单信息内部类
+     * 顺序信息内部类
      * <p>
      * 意图：
      * 1. 记录一批Pop消息的详细信息

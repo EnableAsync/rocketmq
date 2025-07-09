@@ -632,7 +632,8 @@ public class PopConsumerService extends ServiceThread {
      */
     protected CompletableFuture<PopConsumerContext> getMessageAsync(CompletableFuture<PopConsumerContext> future,
         String clientHost, String groupId, String topicId, int queueId, int batchSize, MessageFilter filter,
-        PopConsumerRecord.RetryType retryType) {
+        PopConsumerRecord.RetryType retryType) { // 新版 pop kv 获取消息，由 popAsync 调用，popAsync 由 pop processor 调用
+        // 从指定的 topic、queue 中获取消息，包括重试队列也可以。除此之外顺序消息也在这里
 
         return future.thenCompose(result -> {
             // 流控检查：pop请求过多，不应该在这里添加剩余计数
@@ -701,7 +702,7 @@ public class PopConsumerService extends ServiceThread {
      */
     public CompletableFuture<PopConsumerContext> popAsync(String clientHost, long popTime, long invisibleTime,
         String groupId, String topicId, int queueId, int batchSize, boolean fifo, String attemptId, int initMode,
-        MessageFilter filter) {
+        MessageFilter filter) { // 新版 kv pop 的主方法，由 processor 调用
 
         // 创建Pop消费上下文
         PopConsumerContext popConsumerContext =
@@ -709,7 +710,7 @@ public class PopConsumerService extends ServiceThread {
 
         // 前置检查：topic配置和获取锁
         TopicConfig topicConfig = brokerController.getTopicConfigManager().selectTopicConfig(topicId);
-        if (topicConfig == null || !consumerLockService.tryLock(groupId, topicId)) {
+        if (topicConfig == null || !consumerLockService.tryLock(groupId, topicId)) { // 这里是粗化的锁，锁 groupId 和 topicId，原先是锁 groupId、topicId 以及 queueId
             // 无法获取锁或topic不存在，返回空结果
             return CompletableFuture.completedFuture(popConsumerContext);
         }
@@ -781,10 +782,12 @@ public class PopConsumerService extends ServiceThread {
                     // 选择存储策略：优先使用缓存，缓存满则使用持久化存储
                     if (brokerConfig.isEnablePopBufferMerge() &&
                         popConsumerCache != null && !popConsumerCache.isCacheFull()) {
-                        // 优先写入缓存，提高性能
+                        // 写入缓存，提高性能
+                        // PopConsumerRecord 包括了 popTime、groupId、topicId、queueId、retryFlag、invisibleTime、offset、attemptId
+                        // 以及 RetryType（枚举类型，包括 normal topic、retry topic v1 和 retry topic v2）
                         this.popConsumerCache.writeRecords(result.getPopConsumerRecordList());
                     } else {
-                        // 缓存满了或未启用缓存，直接写入持久化存储
+                        // 未启用缓存时，直接写入持久化存储
                         this.popConsumerStore.writeRecords(result.getPopConsumerRecordList());
                     }
 
@@ -794,8 +797,8 @@ public class PopConsumerService extends ServiceThread {
                         PopConsumerRecord popConsumerRecord = result.getPopConsumerRecordList().get(i);
 
                         // 如果缓冲区属于重试消息，消息需要重新编码。
-                        // 当popResponseReturnActualRetryTopic为true或当前topic不是重试topic时，
-                        // 缓冲区不应该被重新编码。
+                        // 当 popResponseReturnActualRetryTopic 为 true 或当前topic不是重试topic时，缓冲区不应该被重新编码。
+                        // 默认不重新编码
                         boolean recode = brokerConfig.isPopResponseReturnActualRetryTopic();
                         if (recode && popConsumerRecord.isRetry()) {
                             result.getGetMessageResultList().set(i, this.recodeRetryMessage(
@@ -1403,7 +1406,7 @@ public class PopConsumerService extends ServiceThread {
      */
     @Override
     public void run() {
-        this.consumerRunning.set(true);
+         this.consumerRunning.set(true);
 
         while (!isStopped()) {
             try {

@@ -162,15 +162,18 @@ public class PopConsumerCache extends ServiceThread {
      * 批量写入消费记录到缓存
      * 意图：当消息被Pop出去但尚未确认时，将记录缓存起来，等待确认或超时处理
      *
-     * 调用链路：PopMessageProcessor.popMessage() -> writeRecords()
+     * 调用链路：PopConsumerService.popAsync() -> writeRecords()
      */
-    public void writeRecords(List<PopConsumerRecord> consumerRecordList) {
+    public void writeRecords(List<PopConsumerRecord> consumerRecordList) { // 被 pop kv 中的 popAsync 调用
+        // 这里的 PopConsumerRecord 包括了 popTime、groupId、topicId、queueId、retryFlag、invisibleTime、offset、attemptId
         // 更新缓存大小估算值
         this.estimateCacheSize.addAndGet(consumerRecordList.size());
 
         // 遍历每个消费记录
         consumerRecordList.forEach(consumerRecord -> {
             // 获取或创建对应的ConsumerRecords对象
+            // consumerRecordTable 为 Key: groupId@topicId@queueId, Value: ConsumerRecords
+            // ConsumerRecords 中包括了 lock groupId topicId queueId brokerConfig 以及一个 TreeMap<Long /* offset */, PopConsumerRecord> recordTreeMap;
             ConsumerRecords consumerRecords = ConcurrentHashMapUtils.computeIfAbsent(consumerRecordTable,
                 this.getKey(consumerRecord), k -> new ConsumerRecords(brokerController.getBrokerConfig(),
                     consumerRecord.getGroupId(), consumerRecord.getTopicId(), consumerRecord.getQueueId()));
