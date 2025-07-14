@@ -71,17 +71,17 @@ public class ConsumerOrderInfoManager extends ConfigManager {
     private transient BrokerController brokerController;
 
     // 顺序消费控制器，支持不同的并发策略
-    private final transient OrderlyConsumeController orderlyConsumeController;
+    private final transient OrderlyConsumeManager orderlyConsumeManager;
 
     /**
      * 默认构造函数
      */
     public ConsumerOrderInfoManager() {
         // 默认使用队列级别的控制器
-        this.orderlyConsumeController = new QueueLevelOrderlyConsumeController(this.table, this.consumerOrderInfoLockManager);
+        this.orderlyConsumeManager = new QueueLevelOrderlyConsumeManager(this.table, this.consumerOrderInfoLockManager);
 
         // 启动控制器
-        this.orderlyConsumeController.start();
+        this.orderlyConsumeManager.start();
     }
 
     /**
@@ -97,14 +97,14 @@ public class ConsumerOrderInfoManager extends ConfigManager {
         String controllerType = brokerController.getBrokerConfig().getOrderlyConsumeControllerType();
         if ("MESSAGE_GROUP_LEVEL".equals(controllerType)) {
             // 使用消息组级别的高并发控制器
-            this.orderlyConsumeController = new MessageGroupOrderlyConsumeController(brokerController, this.consumerOrderInfoLockManager);
+            this.orderlyConsumeManager = new MessageGroupOrderlyConsumeManager(brokerController, this.consumerOrderInfoLockManager);
         } else {
             // 默认使用队列级别的控制器
-            this.orderlyConsumeController = new QueueLevelOrderlyConsumeController(this.table, this.consumerOrderInfoLockManager);
+            this.orderlyConsumeManager = new QueueLevelOrderlyConsumeManager(this.table, this.consumerOrderInfoLockManager);
         }
 
         // 启动控制器
-        this.orderlyConsumeController.start();
+        this.orderlyConsumeManager.start();
     }
 
     // Getter和Setter方法
@@ -145,8 +145,8 @@ public class ConsumerOrderInfoManager extends ConfigManager {
         long invisibleTime,
         List<Long> msgQueueOffsetList, StringBuilder orderInfoBuilder) {
 
-        if (orderlyConsumeController != null) {
-            orderlyConsumeController.update(attemptId, isRetry, topic, group, queueId, popTime, invisibleTime, msgQueueOffsetList, orderInfoBuilder);
+        if (orderlyConsumeManager != null) {
+            orderlyConsumeManager.update(attemptId, isRetry, topic, group, queueId, popTime, invisibleTime, msgQueueOffsetList, orderInfoBuilder);
         }
     }
 
@@ -155,8 +155,8 @@ public class ConsumerOrderInfoManager extends ConfigManager {
      * 用于确保顺序消息的顺序消费
      */
     public boolean checkBlock(String attemptId, String topic, String group, int queueId, long invisibleTime) {
-        return orderlyConsumeController != null &&
-            orderlyConsumeController.checkBlock(attemptId, topic, group, queueId, invisibleTime);
+        return orderlyConsumeManager != null &&
+            orderlyConsumeManager.checkBlock(attemptId, topic, group, queueId, invisibleTime);
     }
 
     /**
@@ -164,8 +164,8 @@ public class ConsumerOrderInfoManager extends ConfigManager {
      * 通常在消费者重新平衡或队列重新分配时调用
      */
     public void clearBlock(String topic, String group, int queueId) {
-        if (orderlyConsumeController != null) {
-            orderlyConsumeController.clearBlock(topic, group, queueId);
+        if (orderlyConsumeManager != null) {
+            orderlyConsumeManager.clearBlock(topic, group, queueId);
         }
     }
 
@@ -174,10 +174,7 @@ public class ConsumerOrderInfoManager extends ConfigManager {
      * 这是核心方法之一，当消费者ACK消息时调用
      */
     public long commitAndNext(String topic, String group, int queueId, long queueOffset, long popTime) {
-        if (orderlyConsumeController != null) {
-            return orderlyConsumeController.commitAndNext(topic, group, queueId, queueOffset, popTime);
-        }
-        return queueOffset + 1; // 默认返回下一个偏移量
+        return orderlyConsumeManager.commitAndNext(topic, group, queueId, queueOffset, popTime);
     }
 
     /**
@@ -186,8 +183,8 @@ public class ConsumerOrderInfoManager extends ConfigManager {
      */
     public void updateNextVisibleTime(String topic, String group, int queueId, long queueOffset, long popTime,
         long nextVisibleTime) {
-        if (orderlyConsumeController != null) {
-            orderlyConsumeController.updateNextVisibleTime(topic, group, queueId, queueOffset, popTime, nextVisibleTime);
+        if (orderlyConsumeManager != null) {
+            orderlyConsumeManager.updateNextVisibleTime(topic, group, queueId, queueOffset, popTime, nextVisibleTime);
         }
     }
 
@@ -315,8 +312,8 @@ public class ConsumerOrderInfoManager extends ConfigManager {
      * 关闭管理器，释放资源
      */
     public void shutdown() {
-        if (this.orderlyConsumeController != null) {
-            this.orderlyConsumeController.shutdown();
+        if (this.orderlyConsumeManager != null) {
+            this.orderlyConsumeManager.shutdown();
         }
         if (this.consumerOrderInfoLockManager != null) {
             this.consumerOrderInfoLockManager.shutdown();

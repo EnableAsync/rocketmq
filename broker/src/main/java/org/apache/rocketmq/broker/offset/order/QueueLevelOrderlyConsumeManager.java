@@ -34,7 +34,7 @@ import org.apache.rocketmq.remoting.protocol.header.ExtraInfoUtil;
  * 2. 简单可靠，确保严格的队列内顺序
  * 3. 并发度受限于队列数量
  */
-public class QueueLevelOrderlyConsumeController implements OrderlyConsumeController {
+public class QueueLevelOrderlyConsumeManager implements OrderlyConsumeManager {
     private static final Logger log = LoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
 
     public static final String CONTROLLER_TYPE = "QUEUE_LEVEL";
@@ -58,7 +58,7 @@ public class QueueLevelOrderlyConsumeController implements OrderlyConsumeControl
      *
      * @param table 并发安全
      */
-    public QueueLevelOrderlyConsumeController(ConcurrentHashMap<String, ConcurrentHashMap<Integer, ConsumerOrderInfoManager.OrderInfo>> table,
+    public QueueLevelOrderlyConsumeManager(ConcurrentHashMap<String, ConcurrentHashMap<Integer, ConsumerOrderInfoManager.OrderInfo>> table,
         ConsumerOrderInfoLockManager consumerOrderInfoLockManager) {
         this.table = table;
         this.consumerOrderInfoLockManager = consumerOrderInfoLockManager;

@@ -16,15 +16,12 @@
  */
 package org.apache.rocketmq.broker.offset.order;
 
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.common.constant.LoggerName;
-import org.apache.rocketmq.common.message.MessageConst;
 import org.apache.rocketmq.logging.org.slf4j.Logger;
 import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
 import org.apache.rocketmq.remoting.protocol.header.ExtraInfoUtil;
@@ -41,7 +38,7 @@ import org.apache.rocketmq.remoting.protocol.header.ExtraInfoUtil;
  * 数据结构：
  * topic@group -> queueId -> messageGroup -> OrderInfo
  */
-public class MessageGroupOrderlyConsumeController implements OrderlyConsumeController {
+public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager {
     private static final Logger log = LoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
     
     public static final String CONTROLLER_TYPE = "MESSAGE_GROUP_LEVEL";
@@ -75,7 +72,7 @@ public class MessageGroupOrderlyConsumeController implements OrderlyConsumeContr
      * 构造函数
      * @param brokerController Broker控制器
      */
-    public MessageGroupOrderlyConsumeController(BrokerController brokerController, ConsumerOrderInfoLockManager consumerOrderInfoLockManager) {
+    public MessageGroupOrderlyConsumeManager(BrokerController brokerController, ConsumerOrderInfoLockManager consumerOrderInfoLockManager) {
         this.brokerController = brokerController;
     }
     
