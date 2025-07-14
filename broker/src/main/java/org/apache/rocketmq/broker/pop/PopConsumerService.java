@@ -633,6 +633,7 @@ public class PopConsumerService extends ServiceThread {
     protected CompletableFuture<PopConsumerContext> getMessageAsync(CompletableFuture<PopConsumerContext> future,
         String clientHost, String groupId, String topicId, int queueId, int batchSize, MessageFilter filter,
         PopConsumerRecord.RetryType retryType) { // 新版 pop kv 获取消息，由 popAsync 调用，popAsync 由 pop processor 调用
+        // 【顺序消息】判断是否阻塞的逻辑在这里
         // 从指定的 topic、queue 中获取消息，包括重试队列也可以。除此之外顺序消息也在这里
 
         return future.thenCompose(result -> {
@@ -671,17 +672,17 @@ public class PopConsumerService extends ServiceThread {
 
     /**
      * 异步Pop消息的主入口方法 - Pop消费流程的核心控制器
-     *
+     * <p>
      * 【完整业务流程】
      * 1. 参数验证和锁获取
      * 2. 重试消息和普通消息的获取策略
      * 3. 数据持久化（缓存或存储）
      * 4. 消息重编码（针对重试消息）
      * 5. 资源清理和日志记录
-     *
+     * <p>
      * 【调用链路】
      * PopMessageProcessor.processRequest() -> PopConsumerService.popAsync() -> 完整的Pop流程
-     *
+     * <p>
      * 【获取策略】
      * - 每5个请求中有1个优先从重试队列获取（负载均衡）
      * - 支持指定队列和全队列轮询两种模式
@@ -833,7 +834,7 @@ public class PopConsumerService extends ServiceThread {
 
     /**
      * 异步确认消息 - 消息消费完成的标记
-     *
+     * <p>
      * 【Ack机制的重要性】
      * 1. 标记消息已被成功消费，可以从存储中删除
      * 2. 避免消息重复投递
