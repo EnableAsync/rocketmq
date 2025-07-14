@@ -58,7 +58,7 @@ import org.apache.rocketmq.broker.mqtrace.ConsumeMessageHook;
 import org.apache.rocketmq.broker.mqtrace.SendMessageHook;
 import org.apache.rocketmq.broker.offset.BroadcastOffsetManager;
 import org.apache.rocketmq.broker.offset.ConsumerOffsetManager;
-import org.apache.rocketmq.broker.offset.ConsumerOrderInfoManager;
+import org.apache.rocketmq.broker.offset.order.ConsumerOrderInfoManager;
 import org.apache.rocketmq.broker.offset.LmqConsumerOffsetManager;
 import org.apache.rocketmq.broker.out.BrokerOuterAPI;
 import org.apache.rocketmq.broker.plugin.BrokerAttachedPlugin;
@@ -692,7 +692,7 @@ public class BrokerController {
             public void run() {
                 try {
                     BrokerController.this.messageStore.getTimerMessageStore().getTimerMetrics()
-                            .cleanMetrics(BrokerController.this.topicConfigManager.getTopicConfigTable().keySet());
+                        .cleanMetrics(BrokerController.this.topicConfigManager.getTopicConfigTable().keySet());
                 } catch (Throwable e) {
                     LOG.error("BrokerController: failed to clean unused timer metrics.", e);
                 }
@@ -1336,7 +1336,6 @@ public class BrokerController {
         this.consumerOffsetManager = consumerOffsetManager;
     }
 
-
     public BroadcastOffsetManager getBroadcastOffsetManager() {
         return broadcastOffsetManager;
     }
@@ -1881,8 +1880,8 @@ public class BrokerController {
                         new TopicConfig(topicConfig.getTopicName(),
                             topicConfig.getReadQueueNums(),
                             topicConfig.getWriteQueueNums(),
-                                topicConfig.getPerm()
-                                        & this.brokerConfig.getBrokerPermission(), topicConfig.getTopicSysFlag());
+                            topicConfig.getPerm()
+                                & this.brokerConfig.getBrokerPermission(), topicConfig.getTopicSysFlag());
                 } else {
                     registerTopicConfig = new TopicConfig(topicConfig);
                 }
@@ -2610,6 +2609,5 @@ public class BrokerController {
     public void setColdDataCgCtrService(ColdDataCgCtrService coldDataCgCtrService) {
         this.coldDataCgCtrService = coldDataCgCtrService;
     }
-
 
 }

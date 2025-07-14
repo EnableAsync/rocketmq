@@ -873,7 +873,7 @@ public class PopMessageProcessor implements NettyRequestProcessor {
         GetMessageResult getMessageResult,
         PopMessageRequestHeader requestHeader, int queueId, long restNum, int reviveQid,
         Channel channel, long popTime, ExpressionMessageFilter messageFilter, StringBuilder startOffsetInfo,
-        StringBuilder msgOffsetInfo, StringBuilder orderCountInfo) {
+        StringBuilder msgOffsetInfo, StringBuilder orderCountInfo) { // 传统的 pop 消费
 
         // 构建队列锁的键
         String lockKey =

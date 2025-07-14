@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.rocketmq.broker.offset;
+package org.apache.rocketmq.broker.offset.order;
 import com.alibaba.fastjson.annotation.JSONField;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.MoreObjects;
@@ -70,6 +70,9 @@ public class ConsumerOrderInfoManager extends ConfigManager {
     // Broker控制器引用
     private transient BrokerController brokerController;
 
+    // 顺序偏移量管理器
+    private transient OrderlyConsumeManager orderlyConsumeManager;
+
     /**
      * 默认构造函数
      */
@@ -83,6 +86,7 @@ public class ConsumerOrderInfoManager extends ConfigManager {
     public ConsumerOrderInfoManager(BrokerController brokerController) {
         this.brokerController = brokerController;
         this.consumerOrderInfoLockManager = new ConsumerOrderInfoLockManager(brokerController);
+        this.orderlyConsumeManager = new SimpleOrderlyConsumeManager(consumerOrderInfoLockManager);
     }
 
     // Getter和Setter方法
@@ -217,25 +221,7 @@ public class ConsumerOrderInfoManager extends ConfigManager {
      * 3. ConsumerOrderInfoManager.checkBlock()
      */
     public boolean checkBlock(String attemptId, String topic, String group, int queueId, long invisibleTime) {
-        String key = buildKey(topic, group);
-
-        // 获取或创建队列映射
-        ConcurrentHashMap<Integer/*queueId*/, OrderInfo> qs = table.get(key);
-        if (qs == null) {
-            qs = new ConcurrentHashMap<>(16);
-            ConcurrentHashMap<Integer/*queueId*/, OrderInfo> old = table.putIfAbsent(key, qs);
-            if (old != null) {
-                qs = old;
-            }
-        }
-
-        OrderInfo orderInfo = qs.get(queueId);
-        if (orderInfo == null) {
-            return false; // 没有顺序信息，不需要阻塞
-        }
-
-        // 调用OrderInfo的needBlock方法判断是否需要阻塞
-        return orderInfo.needBlock(attemptId, invisibleTime);
+        return orderlyConsumeManager.checkBlock(attemptId, topic, group, queueId, invisibleTime);
     }
 
     /**
@@ -243,10 +229,7 @@ public class ConsumerOrderInfoManager extends ConfigManager {
      * 通常在消费者重新平衡或队列重新分配时调用
      */
     public void clearBlock(String topic, String group, int queueId) {
-        table.computeIfPresent(buildKey(topic, group), (key, val) -> {
-            val.remove(queueId);
-            return val;
-        });
+        orderlyConsumeManager.clearBlock(topic, group, queueId);
     }
 
     /**
@@ -266,58 +249,9 @@ public class ConsumerOrderInfoManager extends ConfigManager {
      * 3. ConsumerOrderInfoManager.commitAndNext()
      */
     public long commitAndNext(String topic, String group, int queueId, long queueOffset, long popTime) {
-        String key = buildKey(topic, group);
-
-        // 获取队列映射
-        ConcurrentHashMap<Integer/*queueId*/, OrderInfo> qs = table.get(key);
-        if (qs == null) {
-            return queueOffset + 1; // 没有顺序信息，返回下一个偏移量
-        }
-
-        OrderInfo orderInfo = qs.get(queueId);
-        if (orderInfo == null) {
-            log.warn("OrderInfo is null, {}, {}, {}", key, queueOffset, orderInfo);
-            return queueOffset + 1;
-        }
-
-        List<Long> o = orderInfo.offsetList;
-        if (o == null || o.isEmpty()) {
-            log.warn("OrderInfo is empty, {}, {}, {}", key, queueOffset, orderInfo);
-            return -1;
-        }
-
-        // 验证popTime是否匹配，防止重复ACK
-        if (popTime != orderInfo.popTime) {
-            log.warn("popTime is not equal to orderInfo saved. key: {}, offset: {}, orderInfo: {}, popTime: {}", key, queueOffset, orderInfo, popTime);
-            return -2;
-        }
-
-        // 在偏移量列表中查找要ACK的消息
-        Long first = o.get(0);
-        int i = 0, size = o.size();
-        for (; i < size; i++) {
-            long temp;
-            if (i == 0) {
-                temp = first; // 第一个元素就是实际偏移量
-            } else {
-                temp = first + o.get(i); // 其他元素是相对于第一个元素的差值
-            }
-            if (queueOffset == temp) {
-                break; // 找到要ACK的消息
-            }
-        }
-
-        // 没有找到对应的偏移量
-        if (i >= size) {
-            log.warn("OrderInfo not found commit offset, {}, {}, {}", key, queueOffset, orderInfo);
-            return -1;
-        }
-
-        // 设置对应位的ACK标记（使用位运算）
-        orderInfo.setCommitOffsetBit(orderInfo.commitOffsetBit | (1L << i));
-
         // 计算下一个需要消费的偏移量
-        long nextOffset = orderInfo.getNextOffset();
+        long nextOffset = orderlyConsumeManager.commitAndNext(topic, group, queueId, queueOffset, popTime);
+
 
         // 更新锁释放时间戳
         updateLockFreeTimestamp(topic, group, queueId, orderInfo);
