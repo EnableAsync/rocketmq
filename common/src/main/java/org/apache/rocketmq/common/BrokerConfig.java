@@ -468,6 +468,14 @@ public class BrokerConfig extends BrokerIdentity {
 
     private boolean enableCreateSysGroup = true;
 
+    /**
+     * 顺序消费控制器类型配置
+     * 支持的值：
+     * - QUEUE_LEVEL: 队列级别的顺序消费控制（默认值，向后兼容）
+     * - MESSAGE_GROUP_LEVEL: 消息组级别的顺序消费控制（高并发模式）
+     */
+    private String orderlyConsumeControllerType = "QUEUE_LEVEL";
+
     public String getConfigBlackList() {
         return configBlackList;
     }
@@ -1879,11 +1887,11 @@ public class BrokerConfig extends BrokerIdentity {
     public void setUseStaticSubscription(boolean useStaticSubscription) {
         this.useStaticSubscription = useStaticSubscription;
     }
-    
+
     public long getFetchNamesrvAddrInterval() {
         return fetchNamesrvAddrInterval;
     }
-    
+
     public void setFetchNamesrvAddrInterval(final long fetchNamesrvAddrInterval) {
         this.fetchNamesrvAddrInterval = fetchNamesrvAddrInterval;
     }
@@ -2078,5 +2086,13 @@ public class BrokerConfig extends BrokerIdentity {
 
     public void setSplitMetadataSize(int splitMetadataSize) {
         this.splitMetadataSize = splitMetadataSize;
+    }
+
+    public String getOrderlyConsumeControllerType() {
+        return orderlyConsumeControllerType;
+    }
+
+    public void setOrderlyConsumeControllerType(String orderlyConsumeControllerType) {
+        this.orderlyConsumeControllerType = orderlyConsumeControllerType;
     }
 }

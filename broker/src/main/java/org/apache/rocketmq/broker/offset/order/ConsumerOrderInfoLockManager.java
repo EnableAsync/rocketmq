@@ -85,6 +85,16 @@ public class ConsumerOrderInfoLockManager {
     }
 
     /**
+     * 启动管理器
+     * 目前时间轮定时器在构造时就已经启动，这里主要用于扩展
+     */
+    public void start() {
+        // 时间轮定时器在构造时已经启动
+        // 这里预留用于将来的扩展
+        POP_LOGGER.info("ConsumerOrderInfoLockManager started");
+    }
+
+    /**
      * 恢复方法：当ConsumerOrderInfoManager从磁盘加载数据时调用
      *
      * 目的：Broker重启后，需要根据持久化的数据重新设置定时任务
@@ -224,6 +234,27 @@ public class ConsumerOrderInfoLockManager {
             this.brokerController.getPopMessageProcessor().notifyLongPollingRequestIfNeed(key.topic, key.group, key.queueId);
         } catch (Exception e) {
             POP_LOGGER.error("unexpect error when notifyLockIsFree. key:{}", key, e);
+        }
+    }
+
+    /**
+     * 清除指定队列的锁信息
+     * 取消该队列的定时任务，清理相关资源
+     *
+     * @param topic 主题名称
+     * @param group 消费者组名称
+     * @param queueId 队列ID
+     */
+    public void clearLock(String topic, String group, int queueId) {
+        try {
+            Key key = new Key(topic, group, queueId);
+            Timeout timeout = timeoutMap.remove(key);
+            if (timeout != null) {
+                timeout.cancel();
+                POP_LOGGER.info("Clear lock for queue, topic:{}, group:{}, queueId:{}", topic, group, queueId);
+            }
+        } catch (Exception e) {
+            POP_LOGGER.error("Failed to clear lock for queue, topic:{}, group:{}, queueId:{}", topic, group, queueId, e);
         }
     }
 

@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 package org.apache.rocketmq.broker.offset.order;
+
 import com.alibaba.fastjson.annotation.JSONField;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.MoreObjects;
@@ -34,12 +35,11 @@ import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.org.slf4j.Logger;
 import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
 import org.apache.rocketmq.remoting.protocol.RemotingSerializable;
-import org.apache.rocketmq.remoting.protocol.header.ExtraInfoUtil;
 
 /**
  * 消费者顺序信息管理器
  * 主要用于管理RocketMQ中POP消费模式下的顺序消息消费状态
- *
+ * <p>
  * 核心功能：
  * 1. 管理每个队列中已弹出但未确认的消息的状态信息
  * 2. 控制顺序消息的阻塞逻辑，确保消息按顺序消费
@@ -70,23 +70,41 @@ public class ConsumerOrderInfoManager extends ConfigManager {
     // Broker控制器引用
     private transient BrokerController brokerController;
 
-    // 顺序偏移量管理器
-    private transient OrderlyConsumeManager orderlyConsumeManager;
+    // 顺序消费控制器，支持不同的并发策略
+    private final transient OrderlyConsumeController orderlyConsumeController;
 
     /**
      * 默认构造函数
      */
     public ConsumerOrderInfoManager() {
+        // 默认使用队列级别的控制器
+        this.orderlyConsumeController = new QueueLevelOrderlyConsumeController(this.table, this.consumerOrderInfoLockManager);
+
+        // 启动控制器
+        this.orderlyConsumeController.start();
     }
 
     /**
      * 带参数的构造函数
+     *
      * @param brokerController Broker控制器，用于获取配置和管理信息
      */
     public ConsumerOrderInfoManager(BrokerController brokerController) {
         this.brokerController = brokerController;
         this.consumerOrderInfoLockManager = new ConsumerOrderInfoLockManager(brokerController);
-        this.orderlyConsumeManager = new SimpleOrderlyConsumeManager(consumerOrderInfoLockManager);
+
+        // 根据配置选择不同的顺序消费策略
+        String controllerType = brokerController.getBrokerConfig().getOrderlyConsumeControllerType();
+        if ("MESSAGE_GROUP_LEVEL".equals(controllerType)) {
+            // 使用消息组级别的高并发控制器
+            this.orderlyConsumeController = new MessageGroupOrderlyConsumeController(brokerController, this.consumerOrderInfoLockManager);
+        } else {
+            // 默认使用队列级别的控制器
+            this.orderlyConsumeController = new QueueLevelOrderlyConsumeController(this.table, this.consumerOrderInfoLockManager);
+        }
+
+        // 启动控制器
+        this.orderlyConsumeController.start();
     }
 
     // Getter和Setter方法
@@ -100,6 +118,7 @@ public class ConsumerOrderInfoManager extends ConfigManager {
 
     /**
      * 构建Topic和Group的组合键
+     *
      * @param topic 主题名称
      * @param group 消费者组名称
      * @return 格式为"topic@group"的字符串
@@ -110,6 +129,7 @@ public class ConsumerOrderInfoManager extends ConfigManager {
 
     /**
      * 解析组合键，分离出Topic和Group
+     *
      * @param key 格式为"topic@group"的字符串
      * @return 包含topic和group的字符串数组
      */
@@ -118,110 +138,25 @@ public class ConsumerOrderInfoManager extends ConfigManager {
     }
 
     /**
-     * 更新锁释放时间戳
-     * 用于锁管理器跟踪队列的锁状态
-     */
-    private void updateLockFreeTimestamp(String topic, String group, int queueId, OrderInfo orderInfo) {
-        if (consumerOrderInfoLockManager != null) {
-            consumerOrderInfoLockManager.updateLockFreeTimestamp(topic, group, queueId, orderInfo);
-        }
-    }
-
-    /**
      * 更新消息列表的接收状态
      * 这是核心方法之一，当消费者POP消息时调用
-     *
-     * @param attemptId 尝试ID，用于标识同一批消息的消费尝试
-     * @param isRetry 是否为重试主题
-     * @param topic 主题名称
-     * @param group 消费者组名称
-     * @param queueId 队列ID
-     * @param popTime 弹出消息的时间
-     * @param invisibleTime 消息不可见时间
-     * @param msgQueueOffsetList 消息的队列偏移量列表
-     * @param orderInfoBuilder 用于构建顺序信息的字符串构建器
-     *
-     * 调用链路：
-     * 1. PopMessageProcessor.processRequest() ->
-     * 2. PopMessageProcessor.popMsgFromQueue() ->
-     * 3. ConsumerOrderInfoManager.update()
      */
-    public void update(String attemptId, boolean isRetry, String topic, String group, int queueId, long popTime, long invisibleTime,
+    public void update(String attemptId, boolean isRetry, String topic, String group, int queueId, long popTime,
+        long invisibleTime,
         List<Long> msgQueueOffsetList, StringBuilder orderInfoBuilder) {
 
-        // 构建存储键
-        String key = buildKey(topic, group);
-
-        // 获取或创建该topic@group对应的队列映射
-        ConcurrentHashMap<Integer/*queueId*/, OrderInfo> qs = table.get(key);
-        if (qs == null) {
-            qs = new ConcurrentHashMap<>(16);
-            // 使用putIfAbsent确保线程安全
-            ConcurrentHashMap<Integer/*queueId*/, OrderInfo> old = table.putIfAbsent(key, qs);
-            if (old != null) {
-                qs = old;
-            }
+        if (orderlyConsumeController != null) {
+            orderlyConsumeController.update(attemptId, isRetry, topic, group, queueId, popTime, invisibleTime, msgQueueOffsetList, orderInfoBuilder);
         }
-
-        // 获取或创建该队列的顺序信息
-        OrderInfo orderInfo = qs.get(queueId);
-        if (orderInfo != null) {
-            // 如果已存在，创建新的OrderInfo并合并消费计数信息
-            OrderInfo newOrderInfo = new OrderInfo(attemptId, popTime, invisibleTime, msgQueueOffsetList, System.currentTimeMillis(), 0);
-            newOrderInfo.mergeOffsetConsumedCount(orderInfo.attemptId, orderInfo.offsetList, orderInfo.offsetConsumedCount);
-            orderInfo = newOrderInfo;
-        } else {
-            // 创建新的OrderInfo
-            orderInfo = new OrderInfo(attemptId, popTime, invisibleTime, msgQueueOffsetList, System.currentTimeMillis(), 0);
-        }
-
-        // 更新队列的顺序信息
-        qs.put(queueId, orderInfo);
-
-        // 构建消费次数信息，用于返回给客户端
-        Map<Long, Integer> offsetConsumedCount = orderInfo.offsetConsumedCount;
-        int minConsumedTimes = Integer.MAX_VALUE;
-        if (offsetConsumedCount != null) {
-            Set<Long> offsetSet = offsetConsumedCount.keySet();
-            // 为每个偏移量构建消费次数信息
-            for (Long offset : offsetSet) {
-                Integer consumedTimes = offsetConsumedCount.getOrDefault(offset, 0);
-                ExtraInfoUtil.buildQueueOffsetOrderCountInfo(orderInfoBuilder, topic, queueId, offset, consumedTimes);
-                minConsumedTimes = Math.min(minConsumedTimes, consumedTimes);
-            }
-            if (offsetConsumedCount.size() != orderInfo.offsetList.size()) {
-                // 如果大小不等，说明有新消息，最小消费次数为0
-                minConsumedTimes = 0;
-            }
-        } else {
-            minConsumedTimes = 0;
-        }
-
-        // 为了兼容性，构建队列级别的消费次数信息
-        ExtraInfoUtil.buildQueueIdOrderCountInfo(orderInfoBuilder, topic, queueId, minConsumedTimes);
-
-        // 更新锁释放时间戳
-        updateLockFreeTimestamp(topic, group, queueId, orderInfo);
     }
 
     /**
      * 检查是否需要阻塞当前的POP请求
      * 用于确保顺序消息的顺序消费
-     *
-     * @param attemptId 尝试ID
-     * @param topic 主题名称
-     * @param group 消费者组名称
-     * @param queueId 队列ID
-     * @param invisibleTime 不可见时间
-     * @return true表示需要阻塞，false表示可以继续
-     *
-     * 调用链路：
-     * 1. PopMessageProcessor.processRequest() ->
-     * 2. PopMessageProcessor.popMsgFromQueue() ->
-     * 3. ConsumerOrderInfoManager.checkBlock()
      */
     public boolean checkBlock(String attemptId, String topic, String group, int queueId, long invisibleTime) {
-        return orderlyConsumeManager.checkBlock(attemptId, topic, group, queueId, invisibleTime);
+        return orderlyConsumeController != null &&
+            orderlyConsumeController.checkBlock(attemptId, topic, group, queueId, invisibleTime);
     }
 
     /**
@@ -229,71 +164,31 @@ public class ConsumerOrderInfoManager extends ConfigManager {
      * 通常在消费者重新平衡或队列重新分配时调用
      */
     public void clearBlock(String topic, String group, int queueId) {
-        orderlyConsumeManager.clearBlock(topic, group, queueId);
+        if (orderlyConsumeController != null) {
+            orderlyConsumeController.clearBlock(topic, group, queueId);
+        }
     }
 
     /**
      * 提交消息并计算下一个消费偏移量
      * 这是核心方法之一，当消费者ACK消息时调用
-     *
-     * @param topic 主题名称
-     * @param group 消费者组名称
-     * @param queueId 队列ID
-     * @param queueOffset 消息的队列偏移量
-     * @param popTime 弹出时间，用于验证
-     * @return -1:非法, -2:无需提交, >=0:需要提交的偏移量
-     *
-     * 调用链路：
-     * 1. AckMessageProcessor.processRequest() ->
-     * 2. PopMessageService.ackMessage() ->
-     * 3. ConsumerOrderInfoManager.commitAndNext()
      */
     public long commitAndNext(String topic, String group, int queueId, long queueOffset, long popTime) {
-        // 计算下一个需要消费的偏移量
-        long nextOffset = orderlyConsumeManager.commitAndNext(topic, group, queueId, queueOffset, popTime);
-
-
-        // 更新锁释放时间戳
-        updateLockFreeTimestamp(topic, group, queueId, orderInfo);
-
-        return nextOffset;
+        if (orderlyConsumeController != null) {
+            return orderlyConsumeController.commitAndNext(topic, group, queueId, queueOffset, popTime);
+        }
+        return queueOffset + 1; // 默认返回下一个偏移量
     }
 
     /**
      * 更新消息的下次可见时间
      * 用于消息的延时重新消费
-     *
-     * @param topic 主题名称
-     * @param group 消费者组名称
-     * @param queueId 队列ID
-     * @param queueOffset 消息偏移量
-     * @param nextVisibleTime 下次可见时间
-     *
-     * 调用链路：
-     * 1. ChangeInvisibleTimeProcessor.processRequest() ->
-     * 2. PopMessageService.changeInvisibleTime() ->
-     * 3. ConsumerOrderInfoManager.updateNextVisibleTime()
      */
-    public void updateNextVisibleTime(String topic, String group, int queueId, long queueOffset, long popTime, long nextVisibleTime) {
-        String key = buildKey(topic, group);
-        ConcurrentHashMap<Integer/*queueId*/, OrderInfo> qs = table.get(key);
-        if (qs == null) {
-            log.warn("orderInfo of queueId is null. key: {}, queueOffset: {}, queueId: {}", key, queueOffset, queueId);
-            return;
+    public void updateNextVisibleTime(String topic, String group, int queueId, long queueOffset, long popTime,
+        long nextVisibleTime) {
+        if (orderlyConsumeController != null) {
+            orderlyConsumeController.updateNextVisibleTime(topic, group, queueId, queueOffset, popTime, nextVisibleTime);
         }
-        OrderInfo orderInfo = qs.get(queueId);
-        if (orderInfo == null) {
-            log.warn("orderInfo is null, key: {}, queueOffset: {}, queueId: {}", key, queueOffset, queueId);
-            return;
-        }
-        // 验证popTime
-        if (popTime != orderInfo.popTime) {
-            log.warn("popTime is not equal to orderInfo saved. key: {}, queueOffset: {}, orderInfo: {}, popTime: {}", key, queueOffset, orderInfo, popTime);
-            return;
-        }
-        // 更新指定偏移量的下次可见时间
-        orderInfo.updateOffsetNextVisibleTime(queueOffset, nextVisibleTime);
-        updateLockFreeTimestamp(topic, group, queueId, orderInfo);
     }
 
     /**
@@ -420,6 +315,9 @@ public class ConsumerOrderInfoManager extends ConfigManager {
      * 关闭管理器，释放资源
      */
     public void shutdown() {
+        if (this.orderlyConsumeController != null) {
+            this.orderlyConsumeController.shutdown();
+        }
         if (this.consumerOrderInfoLockManager != null) {
             this.consumerOrderInfoLockManager.shutdown();
         }
@@ -495,14 +393,16 @@ public class ConsumerOrderInfoManager extends ConfigManager {
 
         /**
          * 构造函数
-         * @param attemptId 尝试ID
-         * @param popTime 弹出时间
-         * @param invisibleTime 不可见时间
-         * @param queueOffsetList 队列偏移量列表
+         *
+         * @param attemptId            尝试ID
+         * @param popTime              弹出时间
+         * @param invisibleTime        不可见时间
+         * @param queueOffsetList      队列偏移量列表
          * @param lastConsumeTimestamp 最后消费时间戳
-         * @param commitOffsetBit 提交偏移量位图
+         * @param commitOffsetBit      提交偏移量位图
          */
-        public OrderInfo(String attemptId, long popTime, long invisibleTime, List<Long> queueOffsetList, long lastConsumeTimestamp,
+        public OrderInfo(String attemptId, long popTime, long invisibleTime, List<Long> queueOffsetList,
+            long lastConsumeTimestamp,
             long commitOffsetBit) {
             this.popTime = popTime;
             this.invisibleTime = invisibleTime;
@@ -580,7 +480,7 @@ public class ConsumerOrderInfoManager extends ConfigManager {
         /**
          * 将队列偏移量列表转换为压缩格式
          * 第一个元素保持不变，后续元素存储与第一个元素的差值
-         *
+         * <p>
          * 例如：[100, 101, 102, 105] -> [100, 1, 2, 5]
          */
         public static List<Long> buildOffsetList(List<Long> queueOffsetList) {
@@ -601,7 +501,7 @@ public class ConsumerOrderInfoManager extends ConfigManager {
          * 判断是否需要阻塞新的消费请求
          * 用于确保顺序消费的核心逻辑
          *
-         * @param attemptId 当前尝试ID
+         * @param attemptId            当前尝试ID
          * @param currentInvisibleTime 当前不可见时间
          * @return true表示需要阻塞
          */
@@ -761,12 +661,13 @@ public class ConsumerOrderInfoManager extends ConfigManager {
          * 合并消费次数信息
          * 将之前的消费记录与当前消费合并，用于统计消息重试次数
          *
-         * @param preAttemptId 之前的尝试ID
-         * @param preOffsetList 之前的偏移量列表
+         * @param preAttemptId            之前的尝试ID
+         * @param preOffsetList           之前的偏移量列表
          * @param prevOffsetConsumedCount 之前的消费次数映射
          */
         @JSONField(serialize = false, deserialize = false)
-        public void mergeOffsetConsumedCount(String preAttemptId, List<Long> preOffsetList, Map<Long, Integer> prevOffsetConsumedCount) {
+        public void mergeOffsetConsumedCount(String preAttemptId, List<Long> preOffsetList,
+            Map<Long, Integer> prevOffsetConsumedCount) {
             Map<Long, Integer> offsetConsumedCount = new HashMap<>();
             if (prevOffsetConsumedCount == null) {
                 prevOffsetConsumedCount = new HashMap<>();
