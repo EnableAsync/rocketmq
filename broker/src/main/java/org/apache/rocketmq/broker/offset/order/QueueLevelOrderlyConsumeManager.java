@@ -58,7 +58,8 @@ public class QueueLevelOrderlyConsumeManager implements OrderlyConsumeManager {
      *
      * @param table 并发安全
      */
-    public QueueLevelOrderlyConsumeManager(ConcurrentHashMap<String, ConcurrentHashMap<Integer, ConsumerOrderInfoManager.OrderInfo>> table,
+    public QueueLevelOrderlyConsumeManager(
+        ConcurrentHashMap<String, ConcurrentHashMap<Integer, ConsumerOrderInfoManager.OrderInfo>> table,
         ConsumerOrderInfoLockManager consumerOrderInfoLockManager) {
         this.table = table;
         this.consumerOrderInfoLockManager = consumerOrderInfoLockManager;
