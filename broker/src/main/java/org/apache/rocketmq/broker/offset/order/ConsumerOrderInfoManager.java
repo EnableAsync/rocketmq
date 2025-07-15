@@ -485,6 +485,8 @@ public class ConsumerOrderInfoManager extends ConfigManager {
             if (queueOffsetList.size() == 1) {
                 simple.addAll(queueOffsetList);
                 return simple;
+            } else if (queueOffsetList.isEmpty()) {
+                return simple;
             }
             Long first = queueOffsetList.get(0);
             simple.add(first);
