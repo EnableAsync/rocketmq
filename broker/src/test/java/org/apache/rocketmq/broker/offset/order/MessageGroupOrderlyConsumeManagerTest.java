@@ -106,7 +106,7 @@ public class MessageGroupOrderlyConsumeManagerTest {
             .thenReturn(future);
 
         StringBuilder orderInfoBuilder = new StringBuilder();
-        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets, orderInfoBuilder);
+        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets, orderInfoBuilder, mockResult);
 
         // 验证构建了订单信息
         assertTrue("Order info should be built for message groups", orderInfoBuilder.length() > 0);
@@ -127,7 +127,7 @@ public class MessageGroupOrderlyConsumeManagerTest {
         when(messageStore.getMessageAsync(anyString(), anyString(), anyInt(), anyLong(), anyInt(), any()))
             .thenReturn(future1);
 
-        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets1, new StringBuilder());
+        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets1, new StringBuilder(), mockResult1);
 
         // 使用相同的attemptId检查，应该不阻塞
         boolean blocked1 = manager.checkBlock(ATTEMPT_ID_1, TOPIC, GROUP, QUEUE_ID, 3000L);
@@ -149,7 +149,7 @@ public class MessageGroupOrderlyConsumeManagerTest {
         when(messageStore.getMessageAsync(anyString(), anyString(), anyInt(), anyLong(), anyInt(), any()))
             .thenReturn(future);
 
-        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, shortInvisibleTime, msgOffsets, new StringBuilder());
+        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, shortInvisibleTime, msgOffsets, new StringBuilder(), mockResult);
 
         // 等待不可见时间过期
         await().atMost(Duration.ofSeconds(1))
@@ -167,7 +167,7 @@ public class MessageGroupOrderlyConsumeManagerTest {
         when(messageStore.getMessageAsync(anyString(), anyString(), anyInt(), anyLong(), anyInt(), any()))
             .thenReturn(future);
 
-        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets, new StringBuilder());
+        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets, new StringBuilder(), mockResult);
 
         // 模拟单个消息查询用于commitAndNext
         setupSingleMessageQuery(100L, MESSAGE_GROUP_1);
@@ -193,7 +193,7 @@ public class MessageGroupOrderlyConsumeManagerTest {
         when(messageStore.getMessageAsync(anyString(), anyString(), anyInt(), anyLong(), anyInt(), any()))
             .thenReturn(future);
 
-        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets, new StringBuilder());
+        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets, new StringBuilder(), mockResult);
 
         // 设置单个消息查询
         setupSingleMessageQuery(100L, MESSAGE_GROUP_1);
@@ -222,7 +222,7 @@ public class MessageGroupOrderlyConsumeManagerTest {
         when(messageStore.getMessageAsync(anyString(), anyString(), anyInt(), anyLong(), anyInt(), any()))
             .thenReturn(future);
 
-        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets, new StringBuilder());
+        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets, new StringBuilder(), mockResult);
 
         // 设置单个消息查询
         setupSingleMessageQuery(101L, MESSAGE_GROUP_1);
@@ -253,7 +253,7 @@ public class MessageGroupOrderlyConsumeManagerTest {
         when(messageStore.getMessageAsync(anyString(), anyString(), anyInt(), anyLong(), anyInt(), any()))
             .thenReturn(future);
 
-        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets, new StringBuilder());
+        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets, new StringBuilder(), mockResult);
 
         // 设置单个消息查询
         setupSingleMessageQuery(100L, MESSAGE_GROUP_1);
@@ -281,7 +281,7 @@ public class MessageGroupOrderlyConsumeManagerTest {
         when(messageStore.getMessageAsync(anyString(), anyString(), anyInt(), anyLong(), anyInt(), any()))
             .thenReturn(future);
 
-        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets, new StringBuilder());
+        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets, new StringBuilder(), mockResult);
 
         // 验证当前会阻塞
         boolean blockedBefore = manager.checkBlock(ATTEMPT_ID_2, TOPIC, GROUP, QUEUE_ID, 3000L);
@@ -316,8 +316,8 @@ public class MessageGroupOrderlyConsumeManagerTest {
             .thenReturn(CompletableFuture.completedFuture(mockResult2));
 
         // 更新两个消息组
-        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets1, new StringBuilder());
-        manager.update(ATTEMPT_ID_2, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets2, new StringBuilder());
+        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets1, new StringBuilder(), mockResult1);
+        manager.update(ATTEMPT_ID_2, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets2, new StringBuilder(), mockResult2);
 
         // 验证两个不同的attemptId都不会互相阻塞（因为它们属于不同的消息组）
         boolean blocked1 = manager.checkBlock(ATTEMPT_ID_2, TOPIC, GROUP, QUEUE_ID, 3000L);
@@ -338,7 +338,7 @@ public class MessageGroupOrderlyConsumeManagerTest {
         when(messageStore.getMessageAsync(anyString(), anyString(), anyInt(), anyLong(), anyInt(), any()))
             .thenReturn(future);
 
-        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets, new StringBuilder());
+        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets, new StringBuilder(), mockResult);
 
         // 设置单个消息查询
         setupSingleMessageQuery(100L, MESSAGE_GROUP_1);
@@ -359,7 +359,7 @@ public class MessageGroupOrderlyConsumeManagerTest {
         when(messageStore.getMessageAsync(anyString(), anyString(), anyInt(), anyLong(), anyInt(), any()))
             .thenReturn(future);
 
-        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets, new StringBuilder());
+        manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L, msgOffsets, new StringBuilder(), mockResult);
 
         // 设置单个消息查询用于不存在的offset
         setupSingleMessageQuery(999L, MESSAGE_GROUP_1);
@@ -373,7 +373,7 @@ public class MessageGroupOrderlyConsumeManagerTest {
     public void testEmptyMessageOffsetList() {
         // 测试空偏移量列表的情况
         manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-            new ArrayList<>(), new StringBuilder());
+            new ArrayList<>(), new StringBuilder(), null);
 
         // 空列表应该不阻塞
         boolean blocked = manager.checkBlock(ATTEMPT_ID_2, TOPIC, GROUP, QUEUE_ID, 3000L);
@@ -384,7 +384,7 @@ public class MessageGroupOrderlyConsumeManagerTest {
     public void testNullMessageOffsetList() {
         // 测试null偏移量列表的情况
         manager.update(ATTEMPT_ID_1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-            null, new StringBuilder());
+            null, new StringBuilder(), null);
 
         // null列表应该不阻塞
         boolean blocked = manager.checkBlock(ATTEMPT_ID_2, TOPIC, GROUP, QUEUE_ID, 3000L);

@@ -70,7 +70,7 @@ public class ConsumerOrderInfoManagerTest {
             popTime,
             3000,
             Lists.newArrayList(1L),
-            new StringBuilder()
+            new StringBuilder(), null
         );
         assertEncodeAndDecode();
         assertEquals(-2, consumerOrderInfoManager.commitAndNext(
@@ -120,7 +120,7 @@ public class ConsumerOrderInfoManagerTest {
                 popTime,
                 3000,
                 Lists.newArrayList(1L, 2L, 3L),
-                orderInfoBuilder
+                orderInfoBuilder, null
             );
             assertEncodeAndDecode();
             Map<String, Integer> orderInfoMap = ExtraInfoUtil.parseOrderCountInfo(orderInfoBuilder.toString());
@@ -140,7 +140,7 @@ public class ConsumerOrderInfoManagerTest {
                 popTime,
                 3000,
                 Lists.newArrayList(1L, 2L, 3L),
-                orderInfoBuilder
+                orderInfoBuilder, null
             );
             assertEncodeAndDecode();
             Map<String, Integer> orderInfoMap = ExtraInfoUtil.parseOrderCountInfo(orderInfoBuilder.toString());
@@ -163,7 +163,7 @@ public class ConsumerOrderInfoManagerTest {
                 popTime,
                 3000,
                 Lists.newArrayList(2L, 3L),
-                orderInfoBuilder
+                orderInfoBuilder, null
             );
             assertEncodeAndDecode();
             Map<String, Integer> orderInfoMap = ExtraInfoUtil.parseOrderCountInfo(orderInfoBuilder.toString());
@@ -186,7 +186,7 @@ public class ConsumerOrderInfoManagerTest {
                 popTime,
                 3000,
                 Lists.newArrayList(3L, 4L),
-                orderInfoBuilder
+                orderInfoBuilder, null
             );
             assertEncodeAndDecode();
             Map<String, Integer> orderInfoMap = ExtraInfoUtil.parseOrderCountInfo(orderInfoBuilder.toString());
@@ -207,7 +207,7 @@ public class ConsumerOrderInfoManagerTest {
                 popTime,
                 3000,
                 Lists.newArrayList(5L, 6L),
-                orderInfoBuilder
+                orderInfoBuilder, null
             );
             assertEncodeAndDecode();
             Map<String, Integer> orderInfoMap = ExtraInfoUtil.parseOrderCountInfo(orderInfoBuilder.toString());
@@ -230,7 +230,7 @@ public class ConsumerOrderInfoManagerTest {
                 popTime,
                 3000,
                 Lists.newArrayList(0L),
-                orderInfoBuilder
+                orderInfoBuilder, null
             );
             consumerOrderInfoManager.update(
                 null,
@@ -241,7 +241,7 @@ public class ConsumerOrderInfoManagerTest {
                 popTime,
                 3000,
                 Lists.newArrayList(0L),
-                orderInfoBuilder
+                orderInfoBuilder, null
             );
             assertEncodeAndDecode();
             Map<String, Integer> orderInfoMap = ExtraInfoUtil.parseOrderCountInfo(orderInfoBuilder.toString());
@@ -261,7 +261,7 @@ public class ConsumerOrderInfoManagerTest {
                 popTime,
                 3000,
                 Lists.newArrayList(0L),
-                orderInfoBuilder
+                orderInfoBuilder, null
             );
             consumerOrderInfoManager.update(
                 null,
@@ -272,7 +272,7 @@ public class ConsumerOrderInfoManagerTest {
                 popTime,
                 3000,
                 Lists.newArrayList(0L),
-                orderInfoBuilder
+                orderInfoBuilder, null
             );
             assertEncodeAndDecode();
             Map<String, Integer> orderInfoMap = ExtraInfoUtil.parseOrderCountInfo(orderInfoBuilder.toString());
@@ -294,7 +294,7 @@ public class ConsumerOrderInfoManagerTest {
                 popTime,
                 3000,
                 Lists.newArrayList(0L, 1L),
-                orderInfoBuilder
+                orderInfoBuilder, null
             );
             consumerOrderInfoManager.update(
                 null,
@@ -305,7 +305,7 @@ public class ConsumerOrderInfoManagerTest {
                 popTime,
                 3000,
                 Lists.newArrayList(0L),
-                orderInfoBuilder
+                orderInfoBuilder, null
             );
             assertEncodeAndDecode();
             Map<String, Integer> orderInfoMap = ExtraInfoUtil.parseOrderCountInfo(orderInfoBuilder.toString());
@@ -332,7 +332,7 @@ public class ConsumerOrderInfoManagerTest {
             popTime,
             1,
             Lists.newArrayList(1L, 2L, 3L),
-            orderInfoBuilder
+            orderInfoBuilder, null
         );
 
         consumerOrderInfoManager.updateNextVisibleTime(TOPIC, GROUP, QUEUE_ID_0, 2L, popTime, System.currentTimeMillis() + invisibleTime);
@@ -355,7 +355,7 @@ public class ConsumerOrderInfoManagerTest {
             popTime,
             1,
             Lists.newArrayList(2L, 3L, 4L),
-            orderInfoBuilder
+            orderInfoBuilder, null
         );
 
         consumerOrderInfoManager.updateNextVisibleTime(TOPIC, GROUP, QUEUE_ID_0, 2L, popTime, System.currentTimeMillis() + invisibleTime);
@@ -397,7 +397,7 @@ public class ConsumerOrderInfoManagerTest {
                 popTime,
                 1,
                 Lists.newArrayList(2L, 3L, 4L),
-                new StringBuilder());
+                new StringBuilder(), null);
 
             consumerOrderInfoManager.autoClean();
             assertEquals(0, consumerOrderInfoManager.getTable().size());
@@ -410,7 +410,7 @@ public class ConsumerOrderInfoManagerTest {
                 popTime,
                 1,
                 Lists.newArrayList(2L, 3L, 4L),
-                new StringBuilder());
+                new StringBuilder(), null);
 
             consumerOrderInfoManager.autoClean();
             assertEquals(0, consumerOrderInfoManager.getTable().size());
@@ -424,7 +424,7 @@ public class ConsumerOrderInfoManagerTest {
                 popTime,
                 1,
                 Lists.newArrayList(2L, 3L, 4L),
-                new StringBuilder());
+                new StringBuilder(), null);
 
             await().atMost(Duration.ofSeconds(1)).until(() -> {
                 consumerOrderInfoManager.autoClean();
@@ -440,7 +440,7 @@ public class ConsumerOrderInfoManagerTest {
                 popTime,
                 1,
                 Lists.newArrayList(2L, 3L, 4L),
-                new StringBuilder());
+                new StringBuilder(), null);
 
             consumerOrderInfoManager.autoClean();
             assertEquals(1, consumerOrderInfoManager.getTable().size());
@@ -481,7 +481,7 @@ public class ConsumerOrderInfoManagerTest {
             popTime,
             1,
             Lists.newArrayList(2L, 3L, 4L),
-            new StringBuilder());
+            new StringBuilder(), null);
         ConsumerOrderInfoManager.OrderInfo orderInfo = consumerOrderInfoManager.getTable().values().stream().findFirst()
             .get().get(QUEUE_ID_0);
 
@@ -502,7 +502,7 @@ public class ConsumerOrderInfoManagerTest {
             popTime,
             1,
             Lists.newArrayList(3L, 4L, 5L),
-            orderInfoBuilder);
+            orderInfoBuilder, null);
         assertEncodeAndDecode();
         Map<String, Integer> orderInfoMap = ExtraInfoUtil.parseOrderCountInfo(orderInfoBuilder.toString());
         assertEquals(3, orderInfoMap.size());
@@ -524,7 +524,7 @@ public class ConsumerOrderInfoManagerTest {
             popTime,
             3000,
             Lists.newArrayList(1L, 2L, 3L),
-            orderInfoBuilder
+            orderInfoBuilder, null
         );
 
         assertTrue(consumerOrderInfoManager.checkBlock(null, TOPIC, GROUP, QUEUE_ID_0, 3000));

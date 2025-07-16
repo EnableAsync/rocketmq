@@ -24,6 +24,7 @@ import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.org.slf4j.Logger;
 import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
 import org.apache.rocketmq.remoting.protocol.header.ExtraInfoUtil;
+import org.apache.rocketmq.store.GetMessageResult;
 
 /**
  * 队列级别的顺序消费控制器
@@ -68,7 +69,7 @@ public class QueueLevelOrderlyConsumeManager implements OrderlyConsumeManager {
     @Override
     public void update(String attemptId, boolean isRetry, String topic, String group, int queueId,
         long popTime, long invisibleTime, List<Long> msgQueueOffsetList,
-        StringBuilder orderInfoBuilder) {
+        StringBuilder orderInfoBuilder, GetMessageResult getMessageResult) {
 
         // 构建存储键
         String key = buildKey(topic, group);

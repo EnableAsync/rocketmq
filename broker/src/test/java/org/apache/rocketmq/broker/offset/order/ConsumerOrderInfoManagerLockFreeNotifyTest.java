@@ -76,7 +76,7 @@ public class ConsumerOrderInfoManagerLockFreeNotifyTest {
             popTime,
             3000,
             Lists.newArrayList(1L),
-            new StringBuilder()
+            new StringBuilder(), null
         );
         await().atLeast(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(4)).until(notified::get);
         assertTrue(consumerOrderInfoManager.getConsumerOrderInfoLockManager().getTimeoutMap().isEmpty());
@@ -93,7 +93,7 @@ public class ConsumerOrderInfoManagerLockFreeNotifyTest {
             popTime,
             3000,
             Lists.newArrayList(1L),
-            new StringBuilder()
+            new StringBuilder(), null
         );
         consumerOrderInfoManager.commitAndNext(
             TOPIC,
@@ -117,7 +117,7 @@ public class ConsumerOrderInfoManagerLockFreeNotifyTest {
             popTime,
             3000,
             Lists.newArrayList(1L),
-            new StringBuilder()
+            new StringBuilder(), null
         );
         consumerOrderInfoManager.updateNextVisibleTime(
             TOPIC,
@@ -142,7 +142,7 @@ public class ConsumerOrderInfoManagerLockFreeNotifyTest {
             popTime,
             3000,
             Lists.newArrayList(1L),
-            new StringBuilder()
+            new StringBuilder(), null
         );
         consumerOrderInfoManager.updateNextVisibleTime(
             TOPIC,
@@ -168,7 +168,7 @@ public class ConsumerOrderInfoManagerLockFreeNotifyTest {
             popTime,
             3000,
             Lists.newArrayList(1L),
-            new StringBuilder()
+            new StringBuilder(), null
         );
         String encodedData = savedConsumerOrderInfoManager.encode();
 

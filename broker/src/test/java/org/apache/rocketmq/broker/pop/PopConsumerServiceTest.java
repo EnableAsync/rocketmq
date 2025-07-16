@@ -233,7 +233,7 @@ public class PopConsumerServiceTest {
         // fifo block
         PopConsumerContext context = new PopConsumerContext(
             clientHost, System.currentTimeMillis(), 20000, groupId, false, ConsumeInitMode.MIN, attemptId);
-        consumerService.setFifoBlocked(context, groupId, topicId, queueId, Collections.singletonList(100L));
+        consumerService.setFifoBlocked(context, groupId, topicId, queueId, Collections.singletonList(100L), getMessageResult);
         Mockito.when(brokerController.getConsumerOrderInfoManager()
             .checkBlock(anyString(), anyString(), anyString(), anyInt(), anyLong())).thenReturn(true);
         Assert.assertTrue(consumerService.isFifoBlocked(context, groupId, topicId, queueId));

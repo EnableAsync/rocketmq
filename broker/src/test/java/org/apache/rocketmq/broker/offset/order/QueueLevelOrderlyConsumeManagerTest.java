@@ -66,7 +66,7 @@ public class QueueLevelOrderlyConsumeManagerTest {
     public void testCheckBlockWithSameAttemptId() {
         // 先更新一些消息
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L), new StringBuilder());
+            Lists.newArrayList(100L, 101L), new StringBuilder(), null);
 
         // 使用相同的attemptId检查，应该不阻塞
         boolean blocked = manager.checkBlock(ATTEMPT_ID, TOPIC, GROUP, QUEUE_ID, 3000L);
@@ -77,7 +77,7 @@ public class QueueLevelOrderlyConsumeManagerTest {
     public void testCheckBlockWithDifferentAttemptId() {
         // 先更新一些消息
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L), new StringBuilder());
+            Lists.newArrayList(100L, 101L), new StringBuilder(), null);
 
         // 使用不同的attemptId检查，应该阻塞（因为消息还在不可见期内）
         boolean blocked = manager.checkBlock("different_attempt", TOPIC, GROUP, QUEUE_ID, 3000L);
@@ -89,11 +89,11 @@ public class QueueLevelOrderlyConsumeManagerTest {
         // 设置很短的不可见时间
         long shortInvisibleTime = 100L;
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, QUEUE_ID, popTime, shortInvisibleTime,
-                      Lists.newArrayList(100L, 101L), new StringBuilder());
+            Lists.newArrayList(100L, 101L), new StringBuilder(), null);
 
         // 等待不可见时间过期
         await().atMost(Duration.ofSeconds(1))
-               .until(() -> !manager.checkBlock("different_attempt", TOPIC, GROUP, QUEUE_ID, shortInvisibleTime));
+            .until(() -> !manager.checkBlock("different_attempt", TOPIC, GROUP, QUEUE_ID, shortInvisibleTime));
     }
 
     @Test
@@ -107,7 +107,7 @@ public class QueueLevelOrderlyConsumeManagerTest {
     public void testCommitAndNextWithWrongPopTime() {
         // 先更新一些消息
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L), new StringBuilder());
+            Lists.newArrayList(100L, 101L), new StringBuilder(), null);
 
         // 使用错误的popTime提交
         long result = manager.commitAndNext(TOPIC, GROUP, QUEUE_ID, 100L, popTime - 1000L);
@@ -118,7 +118,7 @@ public class QueueLevelOrderlyConsumeManagerTest {
     public void testCommitAndNextWithInvalidOffset() {
         // 先更新一些消息
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L), new StringBuilder());
+            Lists.newArrayList(100L, 101L), new StringBuilder(), null);
 
         // 尝试提交不存在的偏移量
         long result = manager.commitAndNext(TOPIC, GROUP, QUEUE_ID, 999L, popTime);
@@ -129,7 +129,7 @@ public class QueueLevelOrderlyConsumeManagerTest {
     public void testCommitAndNextSequential() {
         // 先更新一些连续的消息
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L, 102L), new StringBuilder());
+            Lists.newArrayList(100L, 101L, 102L), new StringBuilder(), null);
 
         // 按顺序提交消息
         long result1 = manager.commitAndNext(TOPIC, GROUP, QUEUE_ID, 100L, popTime);
@@ -146,7 +146,7 @@ public class QueueLevelOrderlyConsumeManagerTest {
     public void testCommitAndNextOutOfOrder() {
         // 先更新一些消息
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L, 102L), new StringBuilder());
+            Lists.newArrayList(100L, 101L, 102L), new StringBuilder(), null);
 
         // 乱序提交消息（先提交中间的）
         long result1 = manager.commitAndNext(TOPIC, GROUP, QUEUE_ID, 101L, popTime);
@@ -165,7 +165,7 @@ public class QueueLevelOrderlyConsumeManagerTest {
     public void testUpdateNextVisibleTimeWithNoOrderInfo() {
         // 当没有OrderInfo时，更新下次可见时间应该记录警告但不抛异常
         manager.updateNextVisibleTime(TOPIC, GROUP, QUEUE_ID, 100L, popTime,
-                                     System.currentTimeMillis() + 5000L);
+            System.currentTimeMillis() + 5000L);
         // 没有抛异常就说明处理正确
     }
 
@@ -173,11 +173,11 @@ public class QueueLevelOrderlyConsumeManagerTest {
     public void testUpdateNextVisibleTimeWithWrongPopTime() {
         // 先更新一些消息
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L), new StringBuilder());
+            Lists.newArrayList(100L, 101L), new StringBuilder(), null);
 
         // 使用错误的popTime更新可见时间（应该记录警告但不抛异常）
         manager.updateNextVisibleTime(TOPIC, GROUP, QUEUE_ID, 100L, popTime - 1000L,
-                                     System.currentTimeMillis() + 5000L);
+            System.currentTimeMillis() + 5000L);
         // 没有抛异常就说明处理正确
     }
 
@@ -185,7 +185,7 @@ public class QueueLevelOrderlyConsumeManagerTest {
     public void testUpdateNextVisibleTimeSuccess() {
         // 先更新一些消息
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L), new StringBuilder());
+            Lists.newArrayList(100L, 101L), new StringBuilder(), null);
 
         long newVisibleTime = System.currentTimeMillis() + 10000L;
         manager.updateNextVisibleTime(TOPIC, GROUP, QUEUE_ID, 100L, popTime, newVisibleTime);
@@ -203,7 +203,7 @@ public class QueueLevelOrderlyConsumeManagerTest {
     public void testClearBlock() {
         // 先更新一些消息
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L), new StringBuilder());
+            Lists.newArrayList(100L, 101L), new StringBuilder(), null);
 
         // 验证当前会阻塞
         boolean blockedBefore = manager.checkBlock("different_attempt", TOPIC, GROUP, QUEUE_ID, 3000L);
@@ -250,24 +250,24 @@ public class QueueLevelOrderlyConsumeManagerTest {
         // 第一次更新
         StringBuilder orderInfoBuilder1 = new StringBuilder();
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L), orderInfoBuilder1);
+            Lists.newArrayList(100L, 101L), orderInfoBuilder1, null);
 
         // 第二次更新相同的消息（模拟重新消费）
         StringBuilder orderInfoBuilder2 = new StringBuilder();
         manager.update("different_attempt", false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L), orderInfoBuilder2);
+            Lists.newArrayList(100L, 101L), orderInfoBuilder2, null);
 
         // 验证消费次数信息被正确构建
         String orderInfo = orderInfoBuilder2.toString();
         assertTrue("Order info should contain consumption count information",
-                  orderInfo.length() > 0);
+            orderInfo.length() > 0);
     }
 
     @Test
     public void testLockManagerIntegration() {
         // 测试update操作会调用锁管理器
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L), new StringBuilder());
+            Lists.newArrayList(100L, 101L), new StringBuilder(), null);
 
         verify(lockManager).updateLockFreeTimestamp(anyString(), anyString(), anyInt(),
             (ConsumerOrderInfoManager.OrderInfo) ArgumentMatchers.any());
@@ -280,9 +280,9 @@ public class QueueLevelOrderlyConsumeManagerTest {
 
         // 在两个不同的队列中更新消息
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, queueId1, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L), new StringBuilder());
+            Lists.newArrayList(100L, 101L), new StringBuilder(), null);
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, queueId2, popTime, 3000L,
-                      Lists.newArrayList(200L, 201L), new StringBuilder());
+            Lists.newArrayList(200L, 201L), new StringBuilder(), null);
 
         // 验证两个队列的操作互不影响
         boolean blocked1 = manager.checkBlock("different_attempt", TOPIC, GROUP, queueId1, 3000L);
@@ -317,34 +317,34 @@ public class QueueLevelOrderlyConsumeManagerTest {
 
         // 在不同的topic-group组合中更新消息
         manager.update(ATTEMPT_ID, false, topic1, group1, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L), new StringBuilder());
+            Lists.newArrayList(100L), new StringBuilder(), null);
         manager.update(ATTEMPT_ID, false, topic1, group2, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(200L), new StringBuilder());
+            Lists.newArrayList(200L), new StringBuilder(), null);
         manager.update(ATTEMPT_ID, false, topic2, group1, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(300L), new StringBuilder());
+            Lists.newArrayList(300L), new StringBuilder(), null);
 
         // 验证不同组合的独立性
         assertTrue("topic1-group1 should be blocked",
-                  manager.checkBlock("different", topic1, group1, QUEUE_ID, 3000L));
+            manager.checkBlock("different", topic1, group1, QUEUE_ID, 3000L));
         assertTrue("topic1-group2 should be blocked",
-                  manager.checkBlock("different", topic1, group2, QUEUE_ID, 3000L));
+            manager.checkBlock("different", topic1, group2, QUEUE_ID, 3000L));
         assertTrue("topic2-group1 should be blocked",
-                  manager.checkBlock("different", topic2, group1, QUEUE_ID, 3000L));
+            manager.checkBlock("different", topic2, group1, QUEUE_ID, 3000L));
 
         // 提交一个组合的消息，不应该影响其他组合
         assertEquals(101L, manager.commitAndNext(topic1, group1, QUEUE_ID, 100L, popTime));
 
         assertTrue("topic1-group2 should still be blocked",
-                  manager.checkBlock("different", topic1, group2, QUEUE_ID, 3000L));
+            manager.checkBlock("different", topic1, group2, QUEUE_ID, 3000L));
         assertTrue("topic2-group1 should still be blocked",
-                  manager.checkBlock("different", topic2, group1, QUEUE_ID, 3000L));
+            manager.checkBlock("different", topic2, group1, QUEUE_ID, 3000L));
     }
 
     @Test
     public void testEmptyOffsetList() {
         // 测试空偏移量列表的情况
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(), new StringBuilder());
+            Lists.newArrayList(), new StringBuilder(), null);
 
         // 空列表应该不阻塞
         boolean blocked = manager.checkBlock("different_attempt", TOPIC, GROUP, QUEUE_ID, 3000L);
@@ -355,11 +355,11 @@ public class QueueLevelOrderlyConsumeManagerTest {
     public void testSingleMessageCommitFlow() {
         // 测试单个消息的完整提交流程
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L), new StringBuilder());
+            Lists.newArrayList(100L), new StringBuilder(), null);
 
         // 初始状态应该阻塞
         assertTrue("Should block initially",
-                  manager.checkBlock("different_attempt", TOPIC, GROUP, QUEUE_ID, 3000L));
+            manager.checkBlock("different_attempt", TOPIC, GROUP, QUEUE_ID, 3000L));
 
         // 提交消息
         long nextOffset = manager.commitAndNext(TOPIC, GROUP, QUEUE_ID, 100L, popTime);
@@ -367,14 +367,14 @@ public class QueueLevelOrderlyConsumeManagerTest {
 
         // 提交后应该不再阻塞
         assertFalse("Should not block after commit",
-                   manager.checkBlock("different_attempt", TOPIC, GROUP, QUEUE_ID, 3000L));
+            manager.checkBlock("different_attempt", TOPIC, GROUP, QUEUE_ID, 3000L));
     }
 
     @Test
     public void testPartialCommitWithVisibleTimeUpdate() {
         // 测试部分提交结合可见时间更新的复杂场景
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L, 102L), new StringBuilder());
+            Lists.newArrayList(100L, 101L, 102L), new StringBuilder(), null);
 
         // 提交第一个和第三个消息
         assertEquals(101L, manager.commitAndNext(TOPIC, GROUP, QUEUE_ID, 100L, popTime));
@@ -386,14 +386,14 @@ public class QueueLevelOrderlyConsumeManagerTest {
 
         // 应该仍然阻塞，因为第二个消息还未提交且不可见时间未到
         assertTrue("Should still block due to uncommitted message with future visible time",
-                  manager.checkBlock("different_attempt", TOPIC, GROUP, QUEUE_ID, 3000L));
+            manager.checkBlock("different_attempt", TOPIC, GROUP, QUEUE_ID, 3000L));
 
         // 提交第二个消息
         assertEquals(103L, manager.commitAndNext(TOPIC, GROUP, QUEUE_ID, 101L, popTime));
 
         // 现在应该不再阻塞
         assertFalse("Should not block after all messages committed",
-                   manager.checkBlock("different_attempt", TOPIC, GROUP, QUEUE_ID, 3000L));
+            manager.checkBlock("different_attempt", TOPIC, GROUP, QUEUE_ID, 3000L));
     }
 
     @Test
@@ -401,11 +401,11 @@ public class QueueLevelOrderlyConsumeManagerTest {
         // 测试重试消息的处理
         StringBuilder orderInfoBuilder = new StringBuilder();
         manager.update(ATTEMPT_ID, true, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L), orderInfoBuilder);
+            Lists.newArrayList(100L, 101L), orderInfoBuilder, null);
 
         // 重试消息也应该正常处理
         assertTrue("Retry messages should also block when necessary",
-                  manager.checkBlock("different_attempt", TOPIC, GROUP, QUEUE_ID, 3000L));
+            manager.checkBlock("different_attempt", TOPIC, GROUP, QUEUE_ID, 3000L));
 
         // 提交重试消息
         assertEquals(101L, manager.commitAndNext(TOPIC, GROUP, QUEUE_ID, 100L, popTime));
@@ -419,20 +419,20 @@ public class QueueLevelOrderlyConsumeManagerTest {
 
         // 第一次更新
         manager.update(attemptId1, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L), new StringBuilder());
+            Lists.newArrayList(100L, 101L), new StringBuilder(), null);
 
         // 第二次更新相同的队列（模拟并发场景）
         StringBuilder orderInfoBuilder = new StringBuilder();
         manager.update(attemptId2, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L, 101L, 102L), orderInfoBuilder);
+            Lists.newArrayList(100L, 101L, 102L), orderInfoBuilder, null);
 
         // 新的attemptId应该不阻塞自己
         assertFalse("New attempt should not block itself",
-                   manager.checkBlock(attemptId2, TOPIC, GROUP, QUEUE_ID, 3000L));
+            manager.checkBlock(attemptId2, TOPIC, GROUP, QUEUE_ID, 3000L));
 
         // 但会阻塞其他attemptId
         assertTrue("Should block different attempt",
-                  manager.checkBlock("other_attempt", TOPIC, GROUP, QUEUE_ID, 3000L));
+            manager.checkBlock("other_attempt", TOPIC, GROUP, QUEUE_ID, 3000L));
 
         // 验证消费次数信息被正确记录
         String orderInfo = orderInfoBuilder.toString();
@@ -445,22 +445,22 @@ public class QueueLevelOrderlyConsumeManagerTest {
 
         // update操作
         manager.update(ATTEMPT_ID, false, TOPIC, GROUP, QUEUE_ID, popTime, 3000L,
-                      Lists.newArrayList(100L), new StringBuilder());
+            Lists.newArrayList(100L), new StringBuilder(), null);
         verify(lockManager).updateLockFreeTimestamp(anyString(), anyString(), anyInt(),
             (ConsumerOrderInfoManager.OrderInfo) ArgumentMatchers.any());
 
         // commitAndNext操作（会触发updateLockFreeTimestamp）
         manager.commitAndNext(TOPIC, GROUP, QUEUE_ID, 100L, popTime);
         verify(lockManager, org.mockito.Mockito.times(2))
-              .updateLockFreeTimestamp(anyString(), anyString(), anyInt(),
-                  (ConsumerOrderInfoManager.OrderInfo) ArgumentMatchers.any());
+            .updateLockFreeTimestamp(anyString(), anyString(), anyInt(),
+                (ConsumerOrderInfoManager.OrderInfo) ArgumentMatchers.any());
 
         // updateNextVisibleTime操作
         manager.updateNextVisibleTime(TOPIC, GROUP, QUEUE_ID, 100L, popTime,
-                                     System.currentTimeMillis() + 5000L);
+            System.currentTimeMillis() + 5000L);
         verify(lockManager, org.mockito.Mockito.times(3))
-              .updateLockFreeTimestamp(anyString(), anyString(), anyInt(),
-                  (ConsumerOrderInfoManager.OrderInfo) ArgumentMatchers.any());
+            .updateLockFreeTimestamp(anyString(), anyString(), anyInt(),
+                (ConsumerOrderInfoManager.OrderInfo) ArgumentMatchers.any());
 
         // clearBlock操作
         manager.clearBlock(TOPIC, GROUP, QUEUE_ID);

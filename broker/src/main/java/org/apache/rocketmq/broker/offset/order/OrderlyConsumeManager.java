@@ -17,6 +17,7 @@
 package org.apache.rocketmq.broker.offset.order;
 
 import java.util.List;
+import org.apache.rocketmq.store.GetMessageResult;
 
 /**
  * 顺序消费控制器接口
@@ -32,10 +33,9 @@ public interface OrderlyConsumeManager {
 
     /**
      * 更新消息列表的接收状态
-     * 当消费者POP消息时调用，用于记录消息状态和构建消费信息
-     * pop kv 不调用，给旧版的 pop 消费调用的
+     * 当消费者POP消息时被 handleGetMessageResult 调用，用于记录消息状态和构建消费信息
      *
-     * @param attemptId 尝试ID，用于标识同一批消息的消费尝试
+     * @param attemptId 区分不同的 pop 请求
      * @param isRetry 是否为重试主题
      * @param topic 主题名称
      * @param group 消费者组名称
@@ -45,9 +45,9 @@ public interface OrderlyConsumeManager {
      * @param msgQueueOffsetList 消息的队列偏移量列表
      * @param orderInfoBuilder 用于构建顺序信息的字符串构建器
      */
-    void update(String attemptId, boolean isRetry, String topic, String group, int queueId, 
+    void update(String attemptId, boolean isRetry, String topic, String group, int queueId,
                 long popTime, long invisibleTime, List<Long> msgQueueOffsetList, 
-                StringBuilder orderInfoBuilder);
+                StringBuilder orderInfoBuilder, GetMessageResult getMessageResult);
 
     /**
      * 检查是否需要阻塞当前的 POP 请求

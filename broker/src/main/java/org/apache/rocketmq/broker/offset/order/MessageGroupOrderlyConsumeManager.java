@@ -16,6 +16,7 @@
  */
 package org.apache.rocketmq.broker.offset.order;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -24,7 +25,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import org.apache.rocketmq.broker.BrokerController;
-import org.apache.rocketmq.broker.offset.MessageGroupOrderInfoManager;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.common.message.MessageConst;
 import org.apache.rocketmq.common.message.MessageDecoder;
@@ -81,7 +81,7 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
     /**
      * 构造函数
      *
-     * @param brokerController Broker控制器
+     * @param brokerController             Broker控制器
      * @param consumerOrderInfoLockManager 锁管理器
      */
     public MessageGroupOrderlyConsumeManager(BrokerController brokerController,
@@ -93,59 +93,74 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
     @Override
     public void update(String attemptId, boolean isRetry, String topic, String group, int queueId,
         long popTime, long invisibleTime, List<Long> msgQueueOffsetList,
-        StringBuilder orderInfoBuilder) {
+        StringBuilder orderInfoBuilder, GetMessageResult getMessageResult) {
 
         if (msgQueueOffsetList == null || msgQueueOffsetList.isEmpty()) {
             return;
         }
 
         // 从消息偏移量列表中读取消息，分析消息组
-        MessageGroupAnalysis analysis = analyzeMessageGroups(topic, group, queueId, msgQueueOffsetList);
+        // MessageGroupAnalysis analysis = analyzeMessageGroups(topic, group, queueId, msgQueueOffsetList);
 
         String key = buildKey(topic, group);
 
         // 获取或创建队列映射
         ConcurrentHashMap<Integer, ConcurrentHashMap<String, ConsumerOrderInfoManager.OrderInfo>> queueMap =
             table.computeIfAbsent(key, k -> new ConcurrentHashMap<>(16));
+//
+//        // 获取或创建消息组映射
+//        ConcurrentHashMap<String, ConsumerOrderInfoManager.OrderInfo> messageGroupMap =
+//            queueMap.computeIfAbsent(queueId, k -> new ConcurrentHashMap<>(16));
+//
+//        // 为每个消息组创建或更新 OrderInfo
+//        for (Map.Entry<String, List<Long>> entry : analysis.getMessageGroupOffsets().entrySet()) {
+//            String messageGroup = entry.getKey();
+//            List<Long> groupOffsets = entry.getValue();
+//
+//            ConsumerOrderInfoManager.OrderInfo existingOrderInfo = messageGroupMap.get(messageGroup);
+//            ConsumerOrderInfoManager.OrderInfo newOrderInfo;
+//            if (existingOrderInfo != null) {
+//                // 合并现有信息
+//                newOrderInfo = new ConsumerOrderInfoManager.OrderInfo(
+//                    attemptId, popTime, invisibleTime, groupOffsets, System.currentTimeMillis(), 0);
+//                newOrderInfo.mergeOffsetConsumedCount(existingOrderInfo.getAttemptId(),
+//                    existingOrderInfo.getOffsetList(), existingOrderInfo.getOffsetConsumedCount());
+//            } else {
+//                // 创建新的 OrderInfo
+//                newOrderInfo = new ConsumerOrderInfoManager.OrderInfo(
+//                    attemptId, popTime, invisibleTime, groupOffsets, System.currentTimeMillis(), 0);
+//            }
+//
+//            messageGroupMap.put(messageGroup, newOrderInfo);
+//
+//            // 为每个消息组构建消费次数信息
+//            buildOrderCountInfo(orderInfoBuilder, topic, queueId, messageGroup, newOrderInfo);
+//        }
+//
+//        // 更新锁释放时间戳
+//        updateLockFreeTimestamp(topic, group, queueId, analysis);
 
-        // 获取或创建消息组映射
-        ConcurrentHashMap<String, ConsumerOrderInfoManager.OrderInfo> messageGroupMap =
-            queueMap.computeIfAbsent(queueId, k -> new ConcurrentHashMap<>(16));
-
-        // 为每个消息组创建或更新 OrderInfo
-        for (Map.Entry<String, List<Long>> entry : analysis.getMessageGroupOffsets().entrySet()) {
-            String messageGroup = entry.getKey();
-            List<Long> groupOffsets = entry.getValue();
-
-            ConsumerOrderInfoManager.OrderInfo existingOrderInfo = messageGroupMap.get(messageGroup);
-            ConsumerOrderInfoManager.OrderInfo newOrderInfo;
-
-            if (existingOrderInfo != null) {
-                // 合并现有信息
-                newOrderInfo = new ConsumerOrderInfoManager.OrderInfo(
-                    attemptId, popTime, invisibleTime, groupOffsets, System.currentTimeMillis(), 0);
-                newOrderInfo.mergeOffsetConsumedCount(existingOrderInfo.getAttemptId(),
-                    existingOrderInfo.getOffsetList(), existingOrderInfo.getOffsetConsumedCount());
-            } else {
-                // 创建新的 OrderInfo
-                newOrderInfo = new ConsumerOrderInfoManager.OrderInfo(
-                    attemptId, popTime, invisibleTime, groupOffsets, System.currentTimeMillis(), 0);
+        if (getMessageResult != null) {
+            List<String> messageGroups = new ArrayList<>();
+            // 待确认是不是一定会有消息组
+            for (ByteBuffer buffer : getMessageResult.getMessageBufferList()) {
+                Map<String, String> properties = MessageDecoder.decodeProperties(buffer);
+                if (properties == null || properties.get(MessageConst.PROPERTY_SHARDING_KEY) == null) {
+                    messageGroups.add(DEFAULT_MESSAGE_GROUP);
+                } else {
+                    messageGroups.add(properties.get(MessageConst.PROPERTY_SHARDING_KEY));
+                }
             }
-
-            messageGroupMap.put(messageGroup, newOrderInfo);
-
-            // 为每个消息组构建消费次数信息
-            buildOrderCountInfo(orderInfoBuilder, topic, queueId, messageGroup, newOrderInfo);
+        } else {
+            log.warn("[MessageGroupOrderlyConsumeManager] getMessageResult is null");
         }
-
-        // 更新锁释放时间戳
-        updateLockFreeTimestamp(topic, group, queueId, analysis);
     }
 
     /**
      * 分析消息偏移量列表，提取消息组信息
      */
-    private MessageGroupAnalysis analyzeMessageGroups(String topic, String group, int queueId, List<Long> msgQueueOffsetList) {
+    private MessageGroupAnalysis analyzeMessageGroups(String topic, String group, int queueId,
+        List<Long> msgQueueOffsetList) {
         MessageGroupAnalysis analysis = new MessageGroupAnalysis();
 
         try {
@@ -211,7 +226,7 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
      * 构建消费次数信息
      */
     private void buildOrderCountInfo(StringBuilder orderInfoBuilder, String topic, int queueId,
-                                   String messageGroup, ConsumerOrderInfoManager.OrderInfo orderInfo) {
+        String messageGroup, ConsumerOrderInfoManager.OrderInfo orderInfo) {
         Map<Long, Integer> offsetConsumedCount = orderInfo.getOffsetConsumedCount();
         int minConsumedTimes = Integer.MAX_VALUE;
 
@@ -254,6 +269,9 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
 
     @Override
     public boolean checkBlock(String attemptId, String topic, String group, int queueId, long invisibleTime) {
+        // 需要通过 attemptId 获取即将要分发的消息偏移量列表
+        // 然后分析这些消息的消息组，检查是否有被阻塞的消息组
+
         String key = buildKey(topic, group);
 
         ConcurrentHashMap<Integer, ConcurrentHashMap<String, ConsumerOrderInfoManager.OrderInfo>> queueMap = table.get(key);
@@ -266,9 +284,15 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
             return false;
         }
 
-        // 需要读取消息以确定要检查的消息组
-        // 这里先实现简化版本：如果任何消息组被阻塞，则阻塞
-        // 实际生产环境中需要根据具体的 attemptId 对应的消息来精确判断
+        // TODO: 这里需要根据 attemptId 获取即将要分发的消息偏移量列表
+        // 然后读取这些消息，提取消息组，只检查相关的消息组是否被阻塞
+        //
+        // 理想的实现步骤：
+        // 1. 根据 attemptId 获取即将要分发的消息偏移量列表
+        // 2. 读取这些消息，提取消息组
+        // 3. 只检查这些消息组是否有未完成的消息（被阻塞状态）
+        //
+        // 当前简化实现：检查所有消息组的阻塞状态
         for (ConsumerOrderInfoManager.OrderInfo orderInfo : messageGroupMap.values()) {
             if (orderInfo.needBlock(attemptId, invisibleTime)) {
                 return true;
@@ -276,6 +300,59 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
         }
 
         return false;
+    }
+
+    /**
+     * 改进版本的 checkBlock 方法，根据具体的消息偏移量列表来检查阻塞状态
+     *
+     * @param attemptId          尝试ID
+     * @param topic              主题
+     * @param group              消费组
+     * @param queueId            队列ID
+     * @param invisibleTime      不可见时间
+     * @param msgQueueOffsetList 即将要分发的消息偏移量列表
+     * @return 是否需要阻塞
+     */
+    public boolean checkBlock(String attemptId, String topic, String group, int queueId,
+        long invisibleTime, List<Long> msgQueueOffsetList) {
+        if (msgQueueOffsetList == null || msgQueueOffsetList.isEmpty()) {
+            return false;
+        }
+
+        String key = buildKey(topic, group);
+
+        ConcurrentHashMap<Integer, ConcurrentHashMap<String, ConsumerOrderInfoManager.OrderInfo>> queueMap = table.get(key);
+        if (queueMap == null) {
+            return false;
+        }
+
+        ConcurrentHashMap<String, ConsumerOrderInfoManager.OrderInfo> messageGroupMap = queueMap.get(queueId);
+        if (messageGroupMap == null || messageGroupMap.isEmpty()) {
+            return false;
+        }
+
+        try {
+            // 分析即将要分发的消息的消息组
+            MessageGroupAnalysis analysis = analyzeMessageGroups(topic, group, queueId, msgQueueOffsetList);
+
+            // 检查这些消息组是否有被阻塞的
+            for (String messageGroup : analysis.getMessageGroupOffsets().keySet()) {
+                ConsumerOrderInfoManager.OrderInfo orderInfo = messageGroupMap.get(messageGroup);
+                if (orderInfo != null && orderInfo.needBlock(attemptId, invisibleTime)) {
+                    // 发现有被阻塞的消息组，需要阻塞当前请求
+                    log.debug("Message group {} is blocked for topic={}, group={}, queueId={}, attemptId={}",
+                        messageGroup, topic, group, queueId, attemptId);
+                    return true;
+                }
+            }
+
+            return false;
+        } catch (Exception e) {
+            log.error("Failed to check block for message groups: topic={}, group={}, queueId={}, attemptId={}",
+                topic, group, queueId, attemptId, e);
+            // 出现异常时，为了安全起见，阻塞请求
+            return true;
+        }
     }
 
     @Override
@@ -387,7 +464,7 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
 
     @Override
     public void updateNextVisibleTime(String topic, String group, int queueId, long queueOffset,
-                                    long popTime, long nextVisibleTime) {
+        long popTime, long nextVisibleTime) {
         String key = buildKey(topic, group);
 
         ConcurrentHashMap<Integer, ConcurrentHashMap<String, ConsumerOrderInfoManager.OrderInfo>> queueMap = table.get(key);

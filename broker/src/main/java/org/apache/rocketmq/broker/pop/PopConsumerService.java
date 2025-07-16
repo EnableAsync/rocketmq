@@ -388,7 +388,8 @@ public class PopConsumerService extends ServiceThread {
             if (context.isFifo()) {
                 // 顺序消息需要设置阻塞状态，确保消息按顺序消费
                 // 【设计原理】前一条消息未确认时，后续消息不能被消费
-                this.setFifoBlocked(context, context.getGroupId(), topicId, queueId, result.getMessageQueueOffset());
+                // 【新增】添加 result，用于给 OrderlyConsumeManager 传递 pop 成功的数据
+                this.setFifoBlocked(context, context.getGroupId(), topicId, queueId, result.getMessageQueueOffset(), result);
             }
 
             // 在这里构建响应头信息，包含偏移量、重试类型等元数据
@@ -580,10 +581,10 @@ public class PopConsumerService extends ServiceThread {
      * @param queueOffsetList 消息队列偏移量列表
      */
     public void setFifoBlocked(PopConsumerContext context,
-        String groupId, String topicId, int queueId, List<Long> queueOffsetList) {
+        String groupId, String topicId, int queueId, List<Long> queueOffsetList, GetMessageResult result) {
         brokerController.getConsumerOrderInfoManager().update(
             context.getAttemptId(), false, topicId, groupId, queueId,
-            context.getPopTime(), context.getInvisibleTime(), queueOffsetList, context.getOrderCountInfoBuilder());
+            context.getPopTime(), context.getInvisibleTime(), queueOffsetList, context.getOrderCountInfoBuilder(), result);
     }
 
     /**

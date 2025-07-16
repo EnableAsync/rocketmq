@@ -35,6 +35,7 @@ import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.org.slf4j.Logger;
 import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
 import org.apache.rocketmq.remoting.protocol.RemotingSerializable;
+import org.apache.rocketmq.store.GetMessageResult;
 
 /**
  * 消费者顺序信息管理器
@@ -143,10 +144,10 @@ public class ConsumerOrderInfoManager extends ConfigManager {
      */
     public void update(String attemptId, boolean isRetry, String topic, String group, int queueId, long popTime,
         long invisibleTime,
-        List<Long> msgQueueOffsetList, StringBuilder orderInfoBuilder) {
+        List<Long> msgQueueOffsetList, StringBuilder orderInfoBuilder, GetMessageResult getMessageResult) {
 
         if (orderlyConsumeManager != null) {
-            orderlyConsumeManager.update(attemptId, isRetry, topic, group, queueId, popTime, invisibleTime, msgQueueOffsetList, orderInfoBuilder);
+            orderlyConsumeManager.update(attemptId, isRetry, topic, group, queueId, popTime, invisibleTime, msgQueueOffsetList, orderInfoBuilder, getMessageResult);
         }
     }
 
