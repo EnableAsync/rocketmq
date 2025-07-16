@@ -316,10 +316,6 @@ public class PopConsumerService extends ServiceThread {
             // 批量解码消息
             List<MessageExt> messageExtList = MessageDecoder.decodesBatch(
                 bufferResult.getByteBuffer(), true, false, true);
-
-            // 及时释放原始buffer避免内存泄漏
-            bufferResult.release();
-
             // 处理每条消息
             for (MessageExt messageExt : messageExtList) {
                 try {
