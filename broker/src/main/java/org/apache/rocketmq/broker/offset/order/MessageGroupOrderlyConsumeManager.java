@@ -21,20 +21,14 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CompletableFuture;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.common.message.MessageConst;
 import org.apache.rocketmq.common.message.MessageDecoder;
-import org.apache.rocketmq.common.message.MessageExt;
 import org.apache.rocketmq.logging.org.slf4j.Logger;
 import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
-import org.apache.rocketmq.remoting.protocol.header.ExtraInfoUtil;
 import org.apache.rocketmq.store.GetMessageResult;
-import org.apache.rocketmq.store.GetMessageStatus;
-import org.apache.rocketmq.store.SelectMappedBufferResult;
 
 /**
  * 消息组级别的顺序消费控制器
@@ -59,21 +53,19 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
     // 默认消息组，用于没有sharding key的消息
     private static final String DEFAULT_MESSAGE_GROUP = "";
 
-    /**
-     * 核心数据结构：四层嵌套Map
-     * 第一层：topic@group -> 第二层Map
-     * 第二层：queueId -> 第三层Map
-     * 第三层：messageGroup -> OrderInfo
-     * <p>
-     * 这种结构支持队列内不同消息组的并发消费
-     */
-    private final ConcurrentHashMap<String/* topic@group */,
+    // topic@group -> queueId -> messageGroup -> message count
+    private final
+    ConcurrentHashMap<String/* topic@group */,
         ConcurrentHashMap<Integer/* queueId */,
-            ConcurrentHashMap<String/* messageGroup */, Integer>>> table =
+            ConcurrentHashMap<String/* messageGroup */, Integer>>> shardingKeyCountMap =
         new ConcurrentHashMap<>(128);
 
-    private final ConcurrentHashMap<String/* topic@group */,
-        ConcurrentHashMap<Long/* offset */, String/* messageGroup */>> offsetShardingKeyMap = new ConcurrentHashMap<>(128);
+    // topic@group -> queueId -> offset -> messageGroup
+    private final
+    ConcurrentHashMap<String/* topic@group */,
+        ConcurrentHashMap<Integer /* queueId */,
+            ConcurrentHashMap<Long/* offset */, String/* messageGroup */>>> offsetShardingKeyMap =
+        new ConcurrentHashMap<>(128);
 
     // 锁管理器，用于管理消费者的锁状态
     private ConsumerOrderInfoLockManager consumerOrderInfoLockManager;
@@ -99,6 +91,20 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
         return false;
     }
 
+    /**
+     * 在 handleGetMessageResult 中被调用，可以在这里过滤给消费者的消息
+     *
+     * @param attemptId          区分不同的 pop 请求
+     * @param isRetry            是否为重试主题
+     * @param topic              主题名称
+     * @param group              消费者组名称
+     * @param queueId            队列ID
+     * @param popTime            弹出消息的时间
+     * @param invisibleTime      消息不可见时间
+     * @param msgQueueOffsetList 消息的队列偏移量列表
+     * @param orderInfoBuilder   用于构建顺序信息的字符串构建器
+     * @param getMessageResult   传入的所有的 GetMessageResult
+     */
     @Override
     public void update(String attemptId, boolean isRetry, String topic, String group, int queueId,
         long popTime, long invisibleTime, List<Long> msgQueueOffsetList,
@@ -111,11 +117,16 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
         String key = buildKey(topic, group);
 
         // 获取或创建队列映射
-        ConcurrentHashMap<Integer, ConcurrentHashMap<String, Integer>> queueMap =
-            table.computeIfAbsent(key, k -> new ConcurrentHashMap<>(16));
+        ConcurrentHashMap<Integer, ConcurrentHashMap<String, Integer>> queueShardingKeyMap =
+            shardingKeyCountMap.computeIfAbsent(key, k -> new ConcurrentHashMap<>(16));
+        ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> queueOffsetMap =
+            offsetShardingKeyMap.computeIfAbsent(key, k -> new ConcurrentHashMap<>(16));
+
         // 无论多少线程同时访问，同一个 queueId 只会创建一个 map 实例
         ConcurrentHashMap<String, Integer> blockedShardingKeyMap =
-            queueMap.computeIfAbsent(queueId, k -> new ConcurrentHashMap<>(16));
+            queueShardingKeyMap.computeIfAbsent(queueId, k -> new ConcurrentHashMap<>(16));
+        ConcurrentHashMap<Long, String> offsetMap =
+            queueOffsetMap.computeIfAbsent(queueId, k -> new ConcurrentHashMap<>(16));
 
         List<Integer> removeIndex = new ArrayList<>();
         for (int i = 0; i < getMessageResult.getMessageBufferList().size(); i++) {
@@ -127,8 +138,7 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
                 // 这条消息不发送给客户端消费
                 removeIndex.add(i);
                 // 缓存 offset -> shardingKey 的映射，用于后续解锁
-                ConcurrentHashMap<Long, String> offsetMap = offsetShardingKeyMap.computeIfAbsent(key, k -> new ConcurrentHashMap<>(16));
-                offsetMap.put(getMessageResult.getMessageQueueOffset().get(i), shardingKey);
+                offsetMap.putIfAbsent(getMessageResult.getMessageQueueOffset().get(i), shardingKey);
             }
         }
         // 过滤掉不发送给客户端的消息
@@ -148,8 +158,32 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
         return properties.getOrDefault(MessageConst.PROPERTY_SHARDING_KEY, DEFAULT_MESSAGE_GROUP);
     }
 
+    /**
+     * 在客户端 ack 的时候被调用
+     *
+     * @param topic       主题名称
+     * @param group       消费者组名称
+     * @param queueId     队列ID
+     * @param queueOffset 消息的队列偏移量
+     * @param popTime     弹出时间，用于验证
+     * @return -1 时说明客户端提交的偏移量错误，>-1 时客户端消费成功
+     */
     @Override
     public long commitAndNext(String topic, String group, int queueId, long queueOffset, long popTime) {
+//        String key = buildKey(topic, group);
+//        ConcurrentHashMap<Integer, ConcurrentHashMap<String, Integer>> queueMap = shardingKeyCountMap.get(key);
+//        ConcurrentHashMap<Long, String> offsetMap = offsetShardingKeyMap.get(key);
+//
+//        if (queueMap == null || offsetMap == null) {
+//            return queueOffset + 1; // 没有顺序信息，返回下一个偏移量
+//        }
+//
+//        ConcurrentHashMap<String, Integer> blockedShardingKeyMap = queueMap.get(queueId);
+//        if (blockedShardingKeyMap == null) {
+//            log.warn("blockedShardingKeyMap is null, {}, {}", key, queueOffset);
+//            return queueOffset + 1; // 没有顺序信息，返回下一个偏移量
+//        }
+
         return -1;
     }
 

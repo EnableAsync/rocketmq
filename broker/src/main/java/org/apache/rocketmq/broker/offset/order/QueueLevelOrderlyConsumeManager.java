@@ -162,7 +162,7 @@ public class QueueLevelOrderlyConsumeManager implements OrderlyConsumeManager {
 
         ConsumerOrderInfoManager.OrderInfo orderInfo = qs.get(queueId);
         if (orderInfo == null) {
-            log.warn("OrderInfo is null, {}, {}, {}", key, queueOffset, orderInfo);
+            log.warn("OrderInfo is null, {}, {}", key, queueOffset);
             return queueOffset + 1;
         }
 
