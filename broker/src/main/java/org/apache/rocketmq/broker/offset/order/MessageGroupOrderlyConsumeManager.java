@@ -38,9 +38,11 @@ import org.apache.rocketmq.store.GetMessageResult;
  * 1. 同一队列内不同消息组可以并行消费
  * 2. 只有相同消息组内的消息需要保持严格顺序
  * 3. 提升并发度，适用于消息组 sharding key 分散的场景
+ * 4. 支持锁的自动过期、续期和WAL持久化
+ * 5. 允许消息重复但不允许丢失
  * <p>
  * 数据结构：
- * topic@group -> queueId -> messageGroup -> OrderInfo
+ * topic@group -> queueId -> offset -> messageGroup (用于快速查找)
  */
 public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager {
     private static final Logger log = LoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
@@ -53,14 +55,10 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
     // 默认消息组，用于没有sharding key的消息
     private static final String DEFAULT_MESSAGE_GROUP = "";
 
-    // topic@group -> queueId -> messageGroup -> message count
-    private final
-    ConcurrentHashMap<String/* topic@group */,
-        ConcurrentHashMap<Integer/* queueId */,
-            ConcurrentHashMap<String/* messageGroup */, Integer>>> shardingKeyCountMap =
-        new ConcurrentHashMap<>(128);
+    // 锁管理器
+    private final ShardingKeyLockManager lockManager;
 
-    // topic@group -> queueId -> offset -> messageGroup
+    // topic@group -> queueId -> offset -> messageGroup (用于快速查找)
     private final
     ConcurrentHashMap<String/* topic@group */,
         ConcurrentHashMap<Integer /* queueId */,
@@ -83,6 +81,10 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
         ConsumerOrderInfoLockManager consumerOrderInfoLockManager) {
         this.brokerController = brokerController;
         this.consumerOrderInfoLockManager = consumerOrderInfoLockManager;
+
+        // 初始化锁管理器，WAL路径基于broker存储路径
+        String walPath = "/tmp/sharding_key_locks";
+        this.lockManager = new ShardingKeyLockManager(walPath);
     }
 
     @Override
@@ -116,70 +118,70 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
 
         String key = buildKey(topic, group);
 
-        // 获取或创建队列映射
-        ConcurrentHashMap<Integer, ConcurrentHashMap<String, Integer>> queueShardingKeyMap =
-            shardingKeyCountMap.computeIfAbsent(key, k -> new ConcurrentHashMap<>(16));
+        // 获取或创建offset映射
         ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> queueOffsetMap =
             this.offsetShardingKeyMap.computeIfAbsent(key, k -> new ConcurrentHashMap<>(16));
-
-        // 使用 computeIfAbsent 确保线程安全的初始化
-        ConcurrentHashMap<String, Integer> blockedShardingKeyMap =
-            queueShardingKeyMap.computeIfAbsent(queueId, k -> new ConcurrentHashMap<>(16));
         ConcurrentHashMap<Long, String> offsetMap =
             queueOffsetMap.computeIfAbsent(queueId, k -> new ConcurrentHashMap<>(16));
 
-        // 检查是否为新创建的空映射（第一次访问该队列）
-        boolean isFirstAccess = blockedShardingKeyMap.isEmpty() && offsetMap.isEmpty();
+        // 按sharding key分组消息
+        Map<String, List<Integer>> shardingKeyGroups = new HashMap<>();
+        Map<String, List<Long>> shardingKeyOffsets = new HashMap<>();
 
-        if (isFirstAccess) {
-            // 使用 synchronized 确保初始化过程的原子性
-            synchronized (blockedShardingKeyMap) {
-                // 双重检查，防止重复初始化
-                if (blockedShardingKeyMap.isEmpty() && offsetMap.isEmpty()) {
-                    // 遍历所有消息，记录 sharding key 信息但不过滤任何消息
-                    for (int i = 0; i < getMessageResult.getMessageBufferList().size(); i++) {
-                        ByteBuffer byteBuffer = getMessageResult.getMessageBufferList().get(i);
-                        String shardingKey = extractShardingKey(byteBuffer);
+        for (int i = 0; i < getMessageResult.getMessageBufferList().size(); i++) {
+            ByteBuffer byteBuffer = getMessageResult.getMessageBufferList().get(i);
+            String shardingKey = extractShardingKey(byteBuffer);
+            long offset = getMessageResult.getMessageQueueOffset().get(i);
 
-                        // 在 shardingKeyCountMap中 记录 sharding key
-                        blockedShardingKeyMap.putIfAbsent(shardingKey, 1);
+            // 记录offset到sharding key的映射
+            offsetMap.put(offset, shardingKey);
 
-                        // 在 offsetShardingKeyMap中 记录 offset对应的sharding key
-                        offsetMap.putIfAbsent(getMessageResult.getMessageQueueOffset().get(i), shardingKey);
-                    }
+            // 按sharding key分组
+            shardingKeyGroups.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(i);
+            shardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(offset);
+        }
 
-                    // 不过滤任何消息，直接返回所有结果
-                    return;
+        // 尝试为每个sharding key获取锁
+        List<Integer> removeIndex = new ArrayList<>();
+
+        for (Map.Entry<String, List<Integer>> entry : shardingKeyGroups.entrySet()) {
+            String shardingKey = entry.getKey();
+            List<Integer> messageIndexes = entry.getValue();
+            List<Long> offsets = shardingKeyOffsets.get(shardingKey);
+
+            // 检查锁是否被占用
+            if (lockManager.isLockOccupied(topic, group, queueId, shardingKey)) {
+                // 锁被占用，这批消息不能发送给客户端
+                removeIndex.addAll(messageIndexes);
+                log.debug("Sharding key locked, messages filtered: topic={}, group={}, queueId={}, shardingKey={}, count={}",
+                    topic, group, queueId, shardingKey, messageIndexes.size());
+            } else {
+                // 尝试获取锁
+                ShardingKeyLock lock = lockManager.tryAcquireLock(topic, group, queueId, shardingKey, offsets);
+                if (lock == null) {
+                    // 获取锁失败，过滤这批消息
+                    removeIndex.addAll(messageIndexes);
+                    log.debug("Failed to acquire lock, messages filtered: topic={}, group={}, queueId={}, shardingKey={}, count={}",
+                        topic, group, queueId, shardingKey, messageIndexes.size());
+                } else {
+                    log.debug("Lock acquired successfully: topic={}, group={}, queueId={}, shardingKey={}, count={}",
+                        topic, group, queueId, shardingKey, messageIndexes.size());
                 }
             }
         }
 
-        // 如果不是首次访问或者在 synchronized 块中发现已被其他线程初始化，执行过滤逻辑
-        List<Integer> removeIndex = new ArrayList<>();
-        for (int i = 0; i < getMessageResult.getMessageBufferList().size(); i++) {
-            ByteBuffer byteBuffer = getMessageResult.getMessageBufferList().get(i);
-            String shardingKey = extractShardingKey(byteBuffer);
-            Integer previousValue = blockedShardingKeyMap.putIfAbsent(shardingKey, 1);
-            if (previousValue != null) {
-                // key 已经存在，说明这个 shardingKey 正在被处理中（被其他消息占用）
-                // 这条消息不发送给客户端消费
-                removeIndex.add(i);
-                // 缓存 offset -> shardingKey 的映射，用于后续解锁
-                offsetMap.putIfAbsent(getMessageResult.getMessageQueueOffset().get(i), shardingKey);
-            }
-        }
         // 过滤掉不发送给客户端的消息
         getMessageResult.removeMessageByIndexList(removeIndex);
     }
 
     private String extractShardingKey(ByteBuffer byteBuffer) {
         if (byteBuffer == null) {
-            log.info("extract shardingKey from null byteBuffer");
+            log.debug("extract shardingKey from null byteBuffer");
             return DEFAULT_MESSAGE_GROUP;
         }
         Map<String, String> properties = MessageDecoder.decodeProperties(byteBuffer);
         if (properties == null) {
-            log.info("extract shardingKey from null properties");
+            log.debug("extract shardingKey from null properties");
             return DEFAULT_MESSAGE_GROUP;
         }
         return properties.getOrDefault(MessageConst.PROPERTY_SHARDING_KEY, DEFAULT_MESSAGE_GROUP);
@@ -198,48 +200,41 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
     @Override
     public long commitAndNext(String topic, String group, int queueId, long queueOffset, long popTime) {
         String key = buildKey(topic, group);
-        ConcurrentHashMap<Integer, ConcurrentHashMap<String, Integer>> queueShardingKeyMap =
-            shardingKeyCountMap.get(key);
         ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> queueOffsetMap =
             offsetShardingKeyMap.get(key);
 
-        if (queueShardingKeyMap == null || queueOffsetMap == null) {
-            return queueOffset + 1; // 没有顺序信息，返回下一个偏移量
-        }
-
-        ConcurrentHashMap<String, Integer> blockedShardingKeyMap = queueShardingKeyMap.get(queueId);
-        ConcurrentHashMap<Long, String> offsetMap = queueOffsetMap.get(queueId);
-
-        if (blockedShardingKeyMap == null || offsetMap == null) {
-            log.warn("blockedShardingKeyMap or offsetMap is null, topic={}, group={}, queueId={}, queueOffset={}",
+        if (queueOffsetMap == null) {
+            log.warn("No offset mapping found: topic={}, group={}, queueId={}, queueOffset={}",
                 topic, group, queueId, queueOffset);
-            return queueOffset + 1; // 没有顺序信息，返回下一个偏移量
+            return queueOffset + 1; // 没有映射信息，返回下一个偏移量
         }
 
-        // 获取该 offset 对应的 sharding key
+        ConcurrentHashMap<Long, String> offsetMap = queueOffsetMap.get(queueId);
+        if (offsetMap == null) {
+            log.warn("No offset mapping found for queue: topic={}, group={}, queueId={}, queueOffset={}",
+                topic, group, queueId, queueOffset);
+            return queueOffset + 1; // 没有映射信息，返回下一个偏移量
+        }
+
+        // 获取该offset对应的sharding key
         String shardingKey = offsetMap.remove(queueOffset);
         if (shardingKey == null) {
-            log.warn("No sharding key found for offset, topic={}, group={}, queueId={}, queueOffset={}",
+            log.warn("No sharding key found for offset: topic={}, group={}, queueId={}, queueOffset={}",
                 topic, group, queueId, queueOffset);
-            return -1; // 没有找到对应的 sharding key，offset 错误
+            return queueOffset + 1; // 没有找到对应的sharding key，可能是重复ack
         }
 
-        // 对 sharding key 的 count 进行原子性递减操作
-        Integer currentCount = blockedShardingKeyMap.computeIfPresent(shardingKey, (k, v) -> {
-            int newValue = v - 1;
-            return newValue <= 0 ? null : newValue; // 如果 count 为 0 或负数，返回 null 表示删除该 key
-        });
-
-        if (currentCount == null) {
-            // count为0，key已被删除
-            log.debug("Sharding key released, topic={}, group={}, queueId={}, shardingKey={}, queueOffset={}",
+        // 释放锁
+        boolean released = lockManager.releaseLock(topic, group, queueId, shardingKey, queueOffset);
+        if (!released) {
+            log.warn("Failed to release lock: topic={}, group={}, queueId={}, shardingKey={}, queueOffset={}",
                 topic, group, queueId, shardingKey, queueOffset);
+            // 即使释放锁失败，也返回下一个偏移量，避免阻塞消费进度
+            // 锁会在过期时自动清理
         } else {
-            log.debug("Sharding key count decreased, topic={}, group={}, queueId={}, shardingKey={}, count={}, queueOffset={}",
-                topic, group, queueId, shardingKey, currentCount, queueOffset);
+            log.debug("Lock released successfully: topic={}, group={}, queueId={}, shardingKey={}, queueOffset={}",
+                topic, group, queueId, shardingKey, queueOffset);
         }
-
-        // todo: 下次可见时间
 
         return queueOffset + 1; // 返回下一个偏移量
     }
@@ -247,22 +242,35 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
     @Override
     public void updateNextVisibleTime(String topic, String group, int queueId, long queueOffset, long popTime,
         long nextVisibleTime) {
-
+        // 消息重新可见时，相关的锁会自动过期，无需特殊处理
+        log.debug("updateNextVisibleTime: topic={}, group={}, queueId={}, queueOffset={}, nextVisibleTime={}",
+            topic, group, queueId, queueOffset, nextVisibleTime);
     }
 
     @Override
     public void clearBlock(String topic, String group, int queueId) {
+        // 清除队列的所有锁和映射信息
         String key = buildKey(topic, group);
-        ConcurrentHashMap<Integer, ConcurrentHashMap<String, Integer>> queueShardingKeyMap =
-            shardingKeyCountMap.get(key);
-        if (queueShardingKeyMap != null) {
-            queueShardingKeyMap.remove(queueId);
-        }
-
         ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> queueOffsetMap =
             offsetShardingKeyMap.get(key);
+
         if (queueOffsetMap != null) {
-            queueOffsetMap.remove(queueId);
+            ConcurrentHashMap<Long, String> offsetMap = queueOffsetMap.remove(queueId);
+            if (offsetMap != null) {
+                // 释放所有相关的锁
+                for (Map.Entry<Long, String> entry : offsetMap.entrySet()) {
+                    String shardingKey = entry.getValue();
+                    long offset = entry.getKey();
+                    try {
+                        lockManager.releaseLock(topic, group, queueId, shardingKey, offset);
+                    } catch (Exception e) {
+                        log.warn("Failed to release lock during clearBlock: topic={}, group={}, queueId={}, shardingKey={}",
+                            topic, group, queueId, shardingKey, e);
+                    }
+                }
+                log.info("Cleared blocks for queue: topic={}, group={}, queueId={}, lockCount={}",
+                    topic, group, queueId, offsetMap.size());
+            }
         }
     }
 
@@ -273,18 +281,29 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
 
     @Override
     public void start() {
-        if (consumerOrderInfoLockManager != null) {
-            consumerOrderInfoLockManager.start();
+        try {
+            lockManager.start();
+            if (consumerOrderInfoLockManager != null) {
+                consumerOrderInfoLockManager.start();
+            }
+            log.info("MessageGroupOrderlyConsumeManager started");
+        } catch (Exception e) {
+            log.error("Failed to start MessageGroupOrderlyConsumeManager", e);
+            throw new RuntimeException("Failed to start MessageGroupOrderlyConsumeManager", e);
         }
-        log.info("MessageGroupOrderlyConsumeController started");
     }
 
     @Override
     public void shutdown() {
-        if (consumerOrderInfoLockManager != null) {
-            consumerOrderInfoLockManager.shutdown();
+        try {
+            lockManager.shutdown();
+            if (consumerOrderInfoLockManager != null) {
+                consumerOrderInfoLockManager.shutdown();
+            }
+            log.info("MessageGroupOrderlyConsumeManager shutdown");
+        } catch (Exception e) {
+            log.error("Failed to shutdown MessageGroupOrderlyConsumeManager", e);
         }
-        log.info("MessageGroupOrderlyConsumeController shutdown");
     }
 
     /**
@@ -295,17 +314,16 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
     }
 
     /**
-     * 消息组分析结果
+     * 获取锁统计信息
      */
-    private static class MessageGroupAnalysis {
-        private Map<String, List<Long>> messageGroupOffsets = new HashMap<>();
+    public Map<String, Object> getLockStatistics() {
+        return lockManager.getLockStatistics();
+    }
 
-        public Map<String, List<Long>> getMessageGroupOffsets() {
-            return messageGroupOffsets;
-        }
-
-        public void setMessageGroupOffsets(Map<String, List<Long>> messageGroupOffsets) {
-            this.messageGroupOffsets = messageGroupOffsets;
-        }
+    /**
+     * 获取锁管理器实例（用于测试和监控）
+     */
+    public ShardingKeyLockManager getLockManager() {
+        return lockManager;
     }
 }
