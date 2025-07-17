@@ -120,7 +120,7 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
         ConcurrentHashMap<Integer, ConcurrentHashMap<String, Integer>> queueShardingKeyMap =
             shardingKeyCountMap.computeIfAbsent(key, k -> new ConcurrentHashMap<>(16));
         ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> queueOffsetMap =
-            offsetShardingKeyMap.computeIfAbsent(key, k -> new ConcurrentHashMap<>(16));
+            this.offsetShardingKeyMap.computeIfAbsent(key, k -> new ConcurrentHashMap<>(16));
 
         // 使用 computeIfAbsent 确保线程安全的初始化
         ConcurrentHashMap<String, Integer> blockedShardingKeyMap =
@@ -197,21 +197,51 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
      */
     @Override
     public long commitAndNext(String topic, String group, int queueId, long queueOffset, long popTime) {
-//        String key = buildKey(topic, group);
-//        ConcurrentHashMap<Integer, ConcurrentHashMap<String, Integer>> queueMap = shardingKeyCountMap.get(key);
-//        ConcurrentHashMap<Long, String> offsetMap = offsetShardingKeyMap.get(key);
-//
-//        if (queueMap == null || offsetMap == null) {
-//            return queueOffset + 1; // 没有顺序信息，返回下一个偏移量
-//        }
-//
-//        ConcurrentHashMap<String, Integer> blockedShardingKeyMap = queueMap.get(queueId);
-//        if (blockedShardingKeyMap == null) {
-//            log.warn("blockedShardingKeyMap is null, {}, {}", key, queueOffset);
-//            return queueOffset + 1; // 没有顺序信息，返回下一个偏移量
-//        }
+        String key = buildKey(topic, group);
+        ConcurrentHashMap<Integer, ConcurrentHashMap<String, Integer>> queueShardingKeyMap =
+            shardingKeyCountMap.get(key);
+        ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> queueOffsetMap =
+            offsetShardingKeyMap.get(key);
 
-        return -1;
+        if (queueShardingKeyMap == null || queueOffsetMap == null) {
+            return queueOffset + 1; // 没有顺序信息，返回下一个偏移量
+        }
+
+        ConcurrentHashMap<String, Integer> blockedShardingKeyMap = queueShardingKeyMap.get(queueId);
+        ConcurrentHashMap<Long, String> offsetMap = queueOffsetMap.get(queueId);
+
+        if (blockedShardingKeyMap == null || offsetMap == null) {
+            log.warn("blockedShardingKeyMap or offsetMap is null, topic={}, group={}, queueId={}, queueOffset={}",
+                topic, group, queueId, queueOffset);
+            return queueOffset + 1; // 没有顺序信息，返回下一个偏移量
+        }
+
+        // 获取该 offset 对应的 sharding key
+        String shardingKey = offsetMap.remove(queueOffset);
+        if (shardingKey == null) {
+            log.warn("No sharding key found for offset, topic={}, group={}, queueId={}, queueOffset={}",
+                topic, group, queueId, queueOffset);
+            return -1; // 没有找到对应的 sharding key，offset 错误
+        }
+
+        // 对 sharding key 的 count 进行原子性递减操作
+        Integer currentCount = blockedShardingKeyMap.computeIfPresent(shardingKey, (k, v) -> {
+            int newValue = v - 1;
+            return newValue <= 0 ? null : newValue; // 如果 count 为 0 或负数，返回 null 表示删除该 key
+        });
+
+        if (currentCount == null) {
+            // count为0，key已被删除
+            log.debug("Sharding key released, topic={}, group={}, queueId={}, shardingKey={}, queueOffset={}",
+                topic, group, queueId, shardingKey, queueOffset);
+        } else {
+            log.debug("Sharding key count decreased, topic={}, group={}, queueId={}, shardingKey={}, count={}, queueOffset={}",
+                topic, group, queueId, shardingKey, currentCount, queueOffset);
+        }
+
+        // todo: 下次可见时间
+
+        return queueOffset + 1; // 返回下一个偏移量
     }
 
     @Override
@@ -222,7 +252,18 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
 
     @Override
     public void clearBlock(String topic, String group, int queueId) {
+        String key = buildKey(topic, group);
+        ConcurrentHashMap<Integer, ConcurrentHashMap<String, Integer>> queueShardingKeyMap =
+            shardingKeyCountMap.get(key);
+        if (queueShardingKeyMap != null) {
+            queueShardingKeyMap.remove(queueId);
+        }
 
+        ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> queueOffsetMap =
+            offsetShardingKeyMap.get(key);
+        if (queueOffsetMap != null) {
+            queueOffsetMap.remove(queueId);
+        }
     }
 
     @Override
