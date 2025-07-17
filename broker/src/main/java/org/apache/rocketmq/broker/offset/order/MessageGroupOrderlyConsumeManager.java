@@ -122,12 +122,39 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
         ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> queueOffsetMap =
             offsetShardingKeyMap.computeIfAbsent(key, k -> new ConcurrentHashMap<>(16));
 
-        // 无论多少线程同时访问，同一个 queueId 只会创建一个 map 实例
+        // 使用 computeIfAbsent 确保线程安全的初始化
         ConcurrentHashMap<String, Integer> blockedShardingKeyMap =
             queueShardingKeyMap.computeIfAbsent(queueId, k -> new ConcurrentHashMap<>(16));
         ConcurrentHashMap<Long, String> offsetMap =
             queueOffsetMap.computeIfAbsent(queueId, k -> new ConcurrentHashMap<>(16));
 
+        // 检查是否为新创建的空映射（第一次访问该队列）
+        boolean isFirstAccess = blockedShardingKeyMap.isEmpty() && offsetMap.isEmpty();
+
+        if (isFirstAccess) {
+            // 使用 synchronized 确保初始化过程的原子性
+            synchronized (blockedShardingKeyMap) {
+                // 双重检查，防止重复初始化
+                if (blockedShardingKeyMap.isEmpty() && offsetMap.isEmpty()) {
+                    // 遍历所有消息，记录 sharding key 信息但不过滤任何消息
+                    for (int i = 0; i < getMessageResult.getMessageBufferList().size(); i++) {
+                        ByteBuffer byteBuffer = getMessageResult.getMessageBufferList().get(i);
+                        String shardingKey = extractShardingKey(byteBuffer);
+
+                        // 在 shardingKeyCountMap中 记录 sharding key
+                        blockedShardingKeyMap.putIfAbsent(shardingKey, 1);
+
+                        // 在 offsetShardingKeyMap中 记录 offset对应的sharding key
+                        offsetMap.putIfAbsent(getMessageResult.getMessageQueueOffset().get(i), shardingKey);
+                    }
+
+                    // 不过滤任何消息，直接返回所有结果
+                    return;
+                }
+            }
+        }
+
+        // 如果不是首次访问或者在 synchronized 块中发现已被其他线程初始化，执行过滤逻辑
         List<Integer> removeIndex = new ArrayList<>();
         for (int i = 0; i < getMessageResult.getMessageBufferList().size(); i++) {
             ByteBuffer byteBuffer = getMessageResult.getMessageBufferList().get(i);
