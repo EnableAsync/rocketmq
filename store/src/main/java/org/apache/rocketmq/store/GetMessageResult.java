@@ -112,28 +112,6 @@ public class GetMessageResult {
         return messageBufferList;
     }
 
-    /**
-     * 根据一个 index 列表，同步地从多个列表中移除多个 index 元素。
-     * @param indexList 要删除的 list
-     */
-    public void removeMessageByIndexList(List<Integer> indexList) {
-        if (indexList.isEmpty()) {
-            return;
-        }
-        for (int index : indexList) {
-            this.messageBufferList.remove(index);
-            SelectMappedBufferResult buffer = this.messageMapedList.remove(index);
-            this.bufferTotalSize -= buffer.getSize();
-            this.msgCount4Commercial -= (int) Math.ceil(
-                buffer.getSize() /  (double)commercialSizePerMsg);
-            this.messageCount--;
-            buffer.release();
-        }
-        if (this.messageBufferList.isEmpty()) {
-            this.setStatus(GetMessageStatus.NO_MATCHED_MESSAGE);
-        }
-    }
-
     public void addMessage(final SelectMappedBufferResult mapedBuffer) {
         this.messageMapedList.add(mapedBuffer);
         this.messageBufferList.add(mapedBuffer.getByteBuffer());
@@ -157,6 +135,45 @@ public class GetMessageResult {
     public void addMessage(final SelectMappedBufferResult mapedBuffer, final long queueOffset, final int batchNum) {
         addMessage(mapedBuffer, queueOffset);
         messageCount += batchNum - 1;
+    }
+
+    /**
+     * 根据一个 index 列表，同步地从多个列表中移除多个 index 元素。
+     * @param indexList 要删除的 list
+     */
+    public void removeMessageByIndexList(List<Integer> indexList) {
+        if (indexList == null || indexList.isEmpty()) {
+            return;
+        }
+
+        // 1. 先对索引列表进行降序排序。
+        // 这样可以确保从后往前删除，避免因元素移除导致的前方元素索引变化问题。
+        // 例如，删除 index=5 的元素，不会影响 index=3 的元素的位置。
+        indexList.sort(Collections.reverseOrder());
+
+        for (int index : indexList) {
+            // 检查索引有效性，增加代码健壮性
+            if (index < 0 || index >= this.messageBufferList.size()) {
+                // 可以选择记录日志或忽略无效索引
+                // log.warn("Invalid index {} found in indexList, skipping.", index);
+                continue;
+            }
+
+            // 2. 按降序索引安全地删除元素
+            this.messageBufferList.remove(index);
+            SelectMappedBufferResult buffer = this.messageMapedList.remove(index);
+
+            // 3. 更新统计数据和释放资源（这部分逻辑本身是正确的）
+            this.bufferTotalSize -= buffer.getSize();
+            this.msgCount4Commercial -= (int) Math.ceil(
+                buffer.getSize() / (double) commercialSizePerMsg);
+            this.messageCount--;
+            buffer.release();
+        }
+
+        if (this.messageBufferList.isEmpty()) {
+            this.setStatus(GetMessageStatus.NO_MATCHED_MESSAGE);
+        }
     }
 
     public void release() {
