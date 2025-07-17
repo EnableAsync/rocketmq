@@ -112,6 +112,28 @@ public class GetMessageResult {
         return messageBufferList;
     }
 
+    /**
+     * 根据一个 index 列表，同步地从多个列表中移除多个 index 元素。
+     * @param indexList 要删除的 list
+     */
+    public void removeMessageByIndexList(List<Integer> indexList) {
+        if (indexList.isEmpty()) {
+            return;
+        }
+        for (int index : indexList) {
+            this.messageBufferList.remove(index);
+            SelectMappedBufferResult buffer = this.messageMapedList.remove(index);
+            this.bufferTotalSize -= buffer.getSize();
+            this.msgCount4Commercial -= (int) Math.ceil(
+                buffer.getSize() /  (double)commercialSizePerMsg);
+            this.messageCount--;
+            buffer.release();
+        }
+        if (this.messageBufferList.isEmpty()) {
+            this.setStatus(GetMessageStatus.NO_MATCHED_MESSAGE);
+        }
+    }
+
     public void addMessage(final SelectMappedBufferResult mapedBuffer) {
         this.messageMapedList.add(mapedBuffer);
         this.messageBufferList.add(mapedBuffer.getByteBuffer());
