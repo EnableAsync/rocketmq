@@ -94,7 +94,7 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
     }
 
     /**
-     * 在 handleGetMessageResult 中被调用，可以在这里过滤给消费者的消息
+     * 在 handleGetMessageResult 中被调用，在这里过滤给消费者的消息
      *
      * @param attemptId          区分不同的 pop 请求
      * @param isRetry            是否为重试主题
@@ -118,7 +118,7 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
 
         String key = buildKey(topic, group);
 
-        // 获取或创建offset映射
+        // 获取或创建 offset 映射
         ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> queueOffsetMap =
             this.offsetShardingKeyMap.computeIfAbsent(key, k -> new ConcurrentHashMap<>(16));
         ConcurrentHashMap<Long, String> offsetMap =
@@ -174,7 +174,7 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
         getMessageResult.removeMessageByIndexList(removeIndex);
     }
 
-    private String extractShardingKey(ByteBuffer byteBuffer) {
+    String extractShardingKey(ByteBuffer byteBuffer) {
         if (byteBuffer == null) {
             log.debug("extract shardingKey from null byteBuffer");
             return DEFAULT_MESSAGE_GROUP;
@@ -242,9 +242,40 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
     @Override
     public void updateNextVisibleTime(String topic, String group, int queueId, long queueOffset, long popTime,
         long nextVisibleTime) {
-        // 消息重新可见时，相关的锁会自动过期，无需特殊处理
-        log.debug("updateNextVisibleTime: topic={}, group={}, queueId={}, queueOffset={}, nextVisibleTime={}",
-            topic, group, queueId, queueOffset, nextVisibleTime);
+        String key = buildKey(topic, group);
+        ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> queueOffsetMap =
+            offsetShardingKeyMap.get(key);
+
+        if (queueOffsetMap == null) {
+            log.warn("No offset mapping found for updateNextVisibleTime: topic={}, group={}, queueId={}, queueOffset={}",
+                topic, group, queueId, queueOffset);
+            return;
+        }
+
+        ConcurrentHashMap<Long, String> offsetMap = queueOffsetMap.get(queueId);
+        if (offsetMap == null) {
+            log.warn("No offset mapping found for queue in updateNextVisibleTime: topic={}, group={}, queueId={}, queueOffset={}",
+                topic, group, queueId, queueOffset);
+            return;
+        }
+
+        // 获取该offset对应的sharding key
+        String shardingKey = offsetMap.get(queueOffset);
+        if (shardingKey == null) {
+            log.warn("No sharding key found for offset in updateNextVisibleTime: topic={}, group={}, queueId={}, queueOffset={}",
+                topic, group, queueId, queueOffset);
+            return;
+        }
+
+        // 更新锁的过期时间
+        boolean updated = lockManager.updateLockExpireTime(topic, group, queueId, shardingKey, nextVisibleTime);
+        if (updated) {
+            log.debug("Lock expire time updated successfully in updateNextVisibleTime: topic={}, group={}, queueId={}, shardingKey={}, nextVisibleTime={}",
+                topic, group, queueId, shardingKey, nextVisibleTime);
+        } else {
+            log.warn("Failed to update lock expire time in updateNextVisibleTime: topic={}, group={}, queueId={}, shardingKey={}, nextVisibleTime={}",
+                topic, group, queueId, shardingKey, nextVisibleTime);
+        }
     }
 
     @Override
