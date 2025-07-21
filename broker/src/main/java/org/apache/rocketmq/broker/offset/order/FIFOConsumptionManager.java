@@ -29,8 +29,8 @@ public class FIFOConsumptionManager {
     }
 
     public FIFOConsumptionManager(BrokerController brokerController) {
-        if (brokerController.getBrokerConfig().getOrderedConsumptionLevel() == OrderedConsumptionLevel.MESSAGE_GROUP) {
-            this.orderedConsumptionManager = new QueueLevelConsumerManager();
+        if (brokerController.getBrokerConfig().getOrderedConsumptionLevel() == OrderedConsumptionLevel.SHARDING_KEY) {
+            this.orderedConsumptionManager = new ShardingKeyLevelConsumerManager();
         } else {
             this.orderedConsumptionManager = new QueueLevelConsumerManager();
         }

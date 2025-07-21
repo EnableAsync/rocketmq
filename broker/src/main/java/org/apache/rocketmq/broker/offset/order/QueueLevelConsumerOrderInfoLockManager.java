@@ -43,7 +43,6 @@ public class QueueLevelConsumerOrderInfoLockManager {
 
     public QueueLevelConsumerOrderInfoLockManager(BrokerController brokerController) {
         this.brokerController = brokerController;
-        this.brokerController.getBrokerConfig();
         this.timer = new HashedWheelTimer(
             new ThreadFactoryImpl("ConsumerOrderInfoLockManager_"),
             TIMER_TICK_MS, TimeUnit.MILLISECONDS);
