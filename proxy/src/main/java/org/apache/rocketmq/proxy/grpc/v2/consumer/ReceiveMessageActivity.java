@@ -157,6 +157,7 @@ public class ReceiveMessageActivity extends AbstractMessingActivity {
                             }
                         }
                     }
+                    System.out.println("proxy popResult: " + popResult);
                     writer.writeAndComplete(ctx, request, popResult);
                 })
                 .exceptionally(t -> {

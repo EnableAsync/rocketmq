@@ -474,7 +474,8 @@ public class BrokerConfig extends BrokerIdentity {
      * - QUEUE_LEVEL: 队列级别的顺序消费控制（默认值，向后兼容）
      * - MESSAGE_GROUP_LEVEL: 消息组级别的顺序消费控制（高并发模式）
      */
-    private String orderlyConsumeControllerType = "QUEUE_LEVEL";
+    private String orderlyConsumeControllerType = "MESSAGE_GROUP_LEVEL";
+//    private String orderlyConsumeControllerType = "QUEUE_LEVEL";
 
     public String getConfigBlackList() {
         return configBlackList;

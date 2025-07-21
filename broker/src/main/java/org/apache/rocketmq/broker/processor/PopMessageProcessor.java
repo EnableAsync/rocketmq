@@ -23,6 +23,7 @@ import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.FileRegion;
 import io.opentelemetry.api.common.Attributes;
+import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
@@ -63,6 +64,7 @@ import org.apache.rocketmq.common.message.MessageConst;
 import org.apache.rocketmq.common.message.MessageDecoder;
 import org.apache.rocketmq.common.message.MessageExt;
 import org.apache.rocketmq.common.message.MessageExtBrokerInner;
+import org.apache.rocketmq.common.message.MessageId;
 import org.apache.rocketmq.common.topic.TopicValidator;
 import org.apache.rocketmq.common.utils.ConcurrentHashMapUtils;
 import org.apache.rocketmq.logging.org.slf4j.Logger;
@@ -387,6 +389,8 @@ public class PopMessageProcessor implements NettyRequestProcessor {
                 requestHeader.getAttemptId(), requestHeader.getInitMode(), messageFilter);
 
             popAsyncFuture.thenApply(result -> {
+                System.out.println("popAsyncFuture result found: " + result.isFound());
+                System.out.println("popAsyncFuture result: " + result.getMessageCount());
                 if (result.isFound()) {
                     response.setCode(ResponseCode.SUCCESS);
                     getMessageResult.setStatus(GetMessageStatus.FOUND);
@@ -435,9 +439,20 @@ public class PopMessageProcessor implements NettyRequestProcessor {
                     return response;
                 }
 
+                System.out.println("popAsyncFuture result.getGetMessageResultList(): " + result.getGetMessageResultList());
                 // add message
                 result.getGetMessageResultList().forEach(temp -> {
                     for (int i = 0; i < temp.getMessageMapedList().size(); i++) {
+                        System.out.println("popAsyncFuture result temp.getMessageMapedList().get(i): " + temp.getMessageMapedList().get(i));
+                        MessageExt messageExt = MessageDecoder.decode(temp.getMessageMapedList().get(i).getByteBuffer());
+                        System.out.println("popAsyncFuture result messageExt: " + messageExt);
+                        try {
+                            MessageId messageId = MessageDecoder.decodeMessageId(messageExt.getMsgId());
+                            System.out.println("popAsyncFuture result MessageId: " + messageId);
+                        } catch (UnknownHostException e) {
+                            System.out.println(e);
+                            throw new RuntimeException(e);
+                        }
                         getMessageResult.addMessage(temp.getMessageMapedList().get(i));
                     }
                 });
@@ -448,6 +463,7 @@ public class PopMessageProcessor implements NettyRequestProcessor {
                     this.brokerController.getBrokerStatsManager().incGroupGetLatency(
                         requestHeader.getConsumerGroup(), requestHeader.getTopic(), requestHeader.getQueueId(),
                         (int) (this.brokerController.getMessageStore().now() - beginTimeMills));
+                    System.out.println("response setBody: " + r.length);
                     response.setBody(r);
                 } else {
                     final GetMessageResult tmpGetMessageResult = getMessageResult;
@@ -475,6 +491,8 @@ public class PopMessageProcessor implements NettyRequestProcessor {
                     }
                     return null;
                 }
+                System.out.println("popAsyncFuture result response: " + response);
+                System.out.println("popAsyncFuture result response: " + response);
                 return response;
             }).thenAccept(result -> NettyRemotingAbstract.writeResponse(channel, request, result));
             return null;

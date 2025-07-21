@@ -144,6 +144,7 @@ public class ConsumerProcessor extends AbstractProcessor {
                     requestHeader,
                     timeoutMillis)
                 .thenApplyAsync(popResult -> {
+                    System.out.println("ConsumerProcessor proxy popResult: " + popResult);
                     if (PopStatus.FOUND.equals(popResult.getPopStatus()) &&
                         popResult.getMsgFoundList() != null &&
                         !popResult.getMsgFoundList().isEmpty() &&

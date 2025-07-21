@@ -90,11 +90,12 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
     @Override
     public boolean checkBlock(String attemptId, String topic, String group, int queueId, long invisibleTime) {
         // message group 不阻塞 queue，先取数据，但是取数据之后不提交位点，而是看这批消息的 sharding key
+        System.out.println("MessageGroupOrderlyConsumeManager#checkBlock: " + attemptId + ", " + topic + ", " + group + ", " + queueId + ", " + invisibleTime);
         return false;
     }
 
     /**
-     * 在 handleGetMessageResult 中被调用，在这里过滤给消费者的消息
+     * 在 handleGetMessageResult 中被调用，与 QueueLevel 不同，在这里还过滤给消费者的消息
      *
      * @param attemptId          区分不同的 pop 请求
      * @param isRetry            是否为重试主题
@@ -111,6 +112,9 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
     public void update(String attemptId, boolean isRetry, String topic, String group, int queueId,
         long popTime, long invisibleTime, List<Long> msgQueueOffsetList,
         StringBuilder orderInfoBuilder, GetMessageResult getMessageResult) {
+        System.out.println("MessageGroupOrderlyConsumeManager#update: " + getMessageResult);
+        System.out.println("MessageGroupOrderlyConsumeManager#update: " + getMessageResult.getMessageQueueOffset());
+        System.out.println("MessageGroupOrderlyConsumeManager#update: " + getMessageResult.getMessageMapedList());
         // 在这里获取到了所有的拉取到的消息，在这里实现 sharding key 分组和过滤
         if (msgQueueOffsetList == null || msgQueueOffsetList.isEmpty()) {
             return;
@@ -172,6 +176,7 @@ public class MessageGroupOrderlyConsumeManager implements OrderlyConsumeManager 
 
         // 过滤掉不发送给客户端的消息
         getMessageResult.removeMessageByIndexList(removeIndex);
+        System.out.println("MessageGroupOrderlyConsumeManager#update: " + getMessageResult.getMessageQueueOffset());
     }
 
     String extractShardingKey(ByteBuffer byteBuffer) {

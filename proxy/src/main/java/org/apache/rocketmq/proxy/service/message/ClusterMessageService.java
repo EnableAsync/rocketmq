@@ -110,6 +110,7 @@ public class ClusterMessageService implements MessageService {
     @Override
     public CompletableFuture<PopResult> popMessage(ProxyContext ctx, AddressableMessageQueue messageQueue,
         PopMessageRequestHeader requestHeader, long timeoutMillis) {
+        System.out.println("ClusterMessageService.popMessage");
         return this.mqClientAPIFactory.getClient().popMessageAsync(
             messageQueue.getBrokerAddr(),
             messageQueue.getBrokerName(),

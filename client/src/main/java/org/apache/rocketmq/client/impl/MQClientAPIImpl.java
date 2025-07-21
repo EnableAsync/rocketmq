@@ -1064,12 +1064,14 @@ public class MQClientAPIImpl implements NameServerUpdateCallback, StartAndShutdo
         switch (response.getCode()) {
             case ResponseCode.SUCCESS:
                 popStatus = PopStatus.FOUND;
+                System.out.println("ProcessPopResponse body size: " + response.getBody().length);
                 ByteBuffer byteBuffer = ByteBuffer.wrap(response.getBody());
                 msgFoundList = MessageDecoder.decodesBatch(
                     byteBuffer,
                     clientConfig.isDecodeReadBody(),
                     clientConfig.isDecodeDecompressBody(),
                     true);
+                System.out.println("ProcessPopResponse msgFoundList size: " + msgFoundList.size());
                 break;
             case ResponseCode.POLLING_FULL:
                 popStatus = PopStatus.POLLING_FULL;

@@ -660,6 +660,7 @@ public class PopConsumerService extends ServiceThread {
             } else {
                 // 继续获取消息
                 final long consumeOffset = this.getPopOffset(groupId, topicId, queueId, result.getInitMode());
+                System.out.println("consumeOffset: " + consumeOffset);
                 return getMessageAsync(clientHost, groupId, topicId, queueId, consumeOffset, remain, filter)
                     .thenApply(getMessageResult -> handleGetMessageResult(
                         result, getMessageResult, topicId, queueId, retryType, consumeOffset));

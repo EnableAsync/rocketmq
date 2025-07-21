@@ -62,7 +62,8 @@ public class GetMessageResult {
     }
 
     private GetMessageResult(GetMessageStatus status, long nextBeginOffset, long minOffset, long maxOffset,
-        List<SelectMappedBufferResult> messageMapedList, List<ByteBuffer> messageBufferList, List<Long> messageQueueOffset) {
+        List<SelectMappedBufferResult> messageMapedList, List<ByteBuffer> messageBufferList,
+        List<Long> messageQueueOffset) {
         this.status = status;
         this.nextBeginOffset = nextBeginOffset;
         this.minOffset = minOffset;
@@ -117,7 +118,7 @@ public class GetMessageResult {
         this.messageBufferList.add(mapedBuffer.getByteBuffer());
         this.bufferTotalSize += mapedBuffer.getSize();
         this.msgCount4Commercial += (int) Math.ceil(
-            mapedBuffer.getSize() /  (double)commercialSizePerMsg);
+            mapedBuffer.getSize() / (double) commercialSizePerMsg);
         this.messageCount++;
     }
 
@@ -126,11 +127,10 @@ public class GetMessageResult {
         this.messageBufferList.add(mapedBuffer.getByteBuffer());
         this.bufferTotalSize += mapedBuffer.getSize();
         this.msgCount4Commercial += (int) Math.ceil(
-            mapedBuffer.getSize() /  (double)commercialSizePerMsg);
+            mapedBuffer.getSize() / (double) commercialSizePerMsg);
         this.messageCount++;
         this.messageQueueOffset.add(queueOffset);
     }
-
 
     public void addMessage(final SelectMappedBufferResult mapedBuffer, final long queueOffset, final int batchNum) {
         addMessage(mapedBuffer, queueOffset);
@@ -139,6 +139,7 @@ public class GetMessageResult {
 
     /**
      * 根据一个 index 列表，同步地从多个列表中移除多个 index 元素。
+     *
      * @param indexList 要删除的 list
      */
     public void removeMessageByIndexList(List<Integer> indexList) {
