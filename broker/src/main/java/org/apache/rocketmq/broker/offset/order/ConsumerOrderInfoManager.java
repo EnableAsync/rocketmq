@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.rocketmq.broker.offset;
+package org.apache.rocketmq.broker.offset.order;
 
 import com.alibaba.fastjson.annotation.JSONField;
 import com.google.common.annotations.VisibleForTesting;
@@ -256,6 +256,7 @@ public class ConsumerOrderInfoManager extends ConfigManager {
         updateLockFreeTimestamp(topic, group, queueId, orderInfo);
     }
 
+    @VisibleForTesting
     protected void autoClean() {
         if (brokerController == null) {
             return;
@@ -351,7 +352,7 @@ public class ConsumerOrderInfoManager extends ConfigManager {
     }
 
     @VisibleForTesting
-    protected ConsumerOrderInfoLockManager getConsumerOrderInfoLockManager() {
+    ConsumerOrderInfoLockManager getConsumerOrderInfoLockManager() {
         return consumerOrderInfoLockManager;
     }
 

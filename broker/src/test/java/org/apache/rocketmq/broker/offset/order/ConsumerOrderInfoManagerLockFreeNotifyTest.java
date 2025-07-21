@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.rocketmq.broker.offset;
+package org.apache.rocketmq.broker.offset.order;
 
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;

@@ -24,7 +24,7 @@ import java.nio.charset.StandardCharsets;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.broker.metrics.PopMetricsManager;
 import org.apache.rocketmq.broker.offset.ConsumerOffsetManager;
-import org.apache.rocketmq.broker.offset.ConsumerOrderInfoManager;
+import org.apache.rocketmq.broker.offset.order.ConsumerOrderInfoManager;
 import org.apache.rocketmq.broker.pop.PopConsumerLockService;
 import org.apache.rocketmq.common.KeyBuilder;
 import org.apache.rocketmq.common.PopAckConstants;
