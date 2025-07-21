@@ -43,7 +43,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-public class ConsumerOrderInfoManagerTest {
+public class QueueLevelConsumerManagerTest {
 
     private static final String TOPIC = "topic";
     private static final String GROUP = "group";
@@ -51,17 +51,17 @@ public class ConsumerOrderInfoManagerTest {
     private static final int QUEUE_ID_1 = 1;
 
     private long popTime;
-    private ConsumerOrderInfoManager consumerOrderInfoManager;
+    private QueueLevelConsumerManager queueLevelConsumerManager;
 
     @Before
     public void before() {
-        consumerOrderInfoManager = new ConsumerOrderInfoManager();
+        queueLevelConsumerManager = new QueueLevelConsumerManager();
         popTime = System.currentTimeMillis();
     }
 
     @Test
     public void testCommitAndNext() {
-        consumerOrderInfoManager.update(
+        queueLevelConsumerManager.update(
             null,
             false,
             TOPIC,
@@ -73,7 +73,7 @@ public class ConsumerOrderInfoManagerTest {
             new StringBuilder()
         );
         assertEncodeAndDecode();
-        assertEquals(-2, consumerOrderInfoManager.commitAndNext(
+        assertEquals(-2, queueLevelConsumerManager.commitAndNext(
             TOPIC,
             GROUP,
             QUEUE_ID_0,
@@ -81,7 +81,7 @@ public class ConsumerOrderInfoManagerTest {
             popTime - 10
         ));
         assertEncodeAndDecode();
-        assertTrue(consumerOrderInfoManager.checkBlock(
+        assertTrue(queueLevelConsumerManager.checkBlock(
             null,
             TOPIC,
             GROUP,
@@ -89,7 +89,7 @@ public class ConsumerOrderInfoManagerTest {
             TimeUnit.SECONDS.toMillis(3)
         ));
 
-        assertEquals(2, consumerOrderInfoManager.commitAndNext(
+        assertEquals(2, queueLevelConsumerManager.commitAndNext(
             TOPIC,
             GROUP,
             QUEUE_ID_0,
@@ -97,7 +97,7 @@ public class ConsumerOrderInfoManagerTest {
             popTime
         ));
         assertEncodeAndDecode();
-        assertFalse(consumerOrderInfoManager.checkBlock(
+        assertFalse(queueLevelConsumerManager.checkBlock(
             null,
             TOPIC,
             GROUP,
@@ -111,7 +111,7 @@ public class ConsumerOrderInfoManagerTest {
         {
             // consume three new messages
             StringBuilder orderInfoBuilder = new StringBuilder();
-            consumerOrderInfoManager.update(
+            queueLevelConsumerManager.update(
                 null,
                 false,
                 TOPIC,
@@ -131,7 +131,7 @@ public class ConsumerOrderInfoManagerTest {
         {
             // reconsume same messages
             StringBuilder orderInfoBuilder = new StringBuilder();
-            consumerOrderInfoManager.update(
+            queueLevelConsumerManager.update(
                 null,
                 false,
                 TOPIC,
@@ -154,7 +154,7 @@ public class ConsumerOrderInfoManagerTest {
         {
             // reconsume last two message
             StringBuilder orderInfoBuilder = new StringBuilder();
-            consumerOrderInfoManager.update(
+            queueLevelConsumerManager.update(
                 null,
                 false,
                 TOPIC,
@@ -177,7 +177,7 @@ public class ConsumerOrderInfoManagerTest {
         {
             // consume a new message and reconsume last message
             StringBuilder orderInfoBuilder = new StringBuilder();
-            consumerOrderInfoManager.update(
+            queueLevelConsumerManager.update(
                 null,
                 false,
                 TOPIC,
@@ -198,7 +198,7 @@ public class ConsumerOrderInfoManagerTest {
         {
             // consume two new messages
             StringBuilder orderInfoBuilder = new StringBuilder();
-            consumerOrderInfoManager.update(
+            queueLevelConsumerManager.update(
                 null,
                 false,
                 TOPIC,
@@ -221,7 +221,7 @@ public class ConsumerOrderInfoManagerTest {
         {
             // consume two new messages
             StringBuilder orderInfoBuilder = new StringBuilder();
-            consumerOrderInfoManager.update(
+            queueLevelConsumerManager.update(
                 null,
                 false,
                 TOPIC,
@@ -232,7 +232,7 @@ public class ConsumerOrderInfoManagerTest {
                 Lists.newArrayList(0L),
                 orderInfoBuilder
             );
-            consumerOrderInfoManager.update(
+            queueLevelConsumerManager.update(
                 null,
                 false,
                 TOPIC,
@@ -252,7 +252,7 @@ public class ConsumerOrderInfoManagerTest {
         {
             // reconsume two message
             StringBuilder orderInfoBuilder = new StringBuilder();
-            consumerOrderInfoManager.update(
+            queueLevelConsumerManager.update(
                 null,
                 false,
                 TOPIC,
@@ -263,7 +263,7 @@ public class ConsumerOrderInfoManagerTest {
                 Lists.newArrayList(0L),
                 orderInfoBuilder
             );
-            consumerOrderInfoManager.update(
+            queueLevelConsumerManager.update(
                 null,
                 false,
                 TOPIC,
@@ -285,7 +285,7 @@ public class ConsumerOrderInfoManagerTest {
         {
             // reconsume with a new message
             StringBuilder orderInfoBuilder = new StringBuilder();
-            consumerOrderInfoManager.update(
+            queueLevelConsumerManager.update(
                 null,
                 false,
                 TOPIC,
@@ -296,7 +296,7 @@ public class ConsumerOrderInfoManagerTest {
                 Lists.newArrayList(0L, 1L),
                 orderInfoBuilder
             );
-            consumerOrderInfoManager.update(
+            queueLevelConsumerManager.update(
                 null,
                 false,
                 TOPIC,
@@ -323,7 +323,7 @@ public class ConsumerOrderInfoManagerTest {
         long invisibleTime = 3000;
 
         StringBuilder orderInfoBuilder = new StringBuilder();
-        consumerOrderInfoManager.update(
+        queueLevelConsumerManager.update(
             null,
             false,
             TOPIC,
@@ -335,18 +335,18 @@ public class ConsumerOrderInfoManagerTest {
             orderInfoBuilder
         );
 
-        consumerOrderInfoManager.updateNextVisibleTime(TOPIC, GROUP, QUEUE_ID_0, 2L, popTime, System.currentTimeMillis() + invisibleTime);
+        queueLevelConsumerManager.updateNextVisibleTime(TOPIC, GROUP, QUEUE_ID_0, 2L, popTime, System.currentTimeMillis() + invisibleTime);
         assertEncodeAndDecode();
 
-        assertEquals(2, consumerOrderInfoManager.commitAndNext(TOPIC, GROUP, QUEUE_ID_0, 1L, popTime));
+        assertEquals(2, queueLevelConsumerManager.commitAndNext(TOPIC, GROUP, QUEUE_ID_0, 1L, popTime));
         assertEncodeAndDecode();
-        assertEquals(2, consumerOrderInfoManager.commitAndNext(TOPIC, GROUP, QUEUE_ID_0, 3L, popTime));
+        assertEquals(2, queueLevelConsumerManager.commitAndNext(TOPIC, GROUP, QUEUE_ID_0, 3L, popTime));
         assertEncodeAndDecode();
 
-        await().atMost(Duration.ofSeconds(invisibleTime + 1)).until(() -> !consumerOrderInfoManager.checkBlock(null, TOPIC, GROUP, QUEUE_ID_0, invisibleTime));
+        await().atMost(Duration.ofSeconds(invisibleTime + 1)).until(() -> !queueLevelConsumerManager.checkBlock(null, TOPIC, GROUP, QUEUE_ID_0, invisibleTime));
 
         orderInfoBuilder = new StringBuilder();
-        consumerOrderInfoManager.update(
+        queueLevelConsumerManager.update(
             null,
             false,
             TOPIC,
@@ -358,18 +358,18 @@ public class ConsumerOrderInfoManagerTest {
             orderInfoBuilder
         );
 
-        consumerOrderInfoManager.updateNextVisibleTime(TOPIC, GROUP, QUEUE_ID_0, 2L, popTime, System.currentTimeMillis() + invisibleTime);
+        queueLevelConsumerManager.updateNextVisibleTime(TOPIC, GROUP, QUEUE_ID_0, 2L, popTime, System.currentTimeMillis() + invisibleTime);
         assertEncodeAndDecode();
 
-        assertEquals(2, consumerOrderInfoManager.commitAndNext(TOPIC, GROUP, QUEUE_ID_0, 3L, popTime));
+        assertEquals(2, queueLevelConsumerManager.commitAndNext(TOPIC, GROUP, QUEUE_ID_0, 3L, popTime));
         assertEncodeAndDecode();
-        assertEquals(2, consumerOrderInfoManager.commitAndNext(TOPIC, GROUP, QUEUE_ID_0, 4L, popTime));
+        assertEquals(2, queueLevelConsumerManager.commitAndNext(TOPIC, GROUP, QUEUE_ID_0, 4L, popTime));
         assertEncodeAndDecode();
-        assertTrue(consumerOrderInfoManager.checkBlock(null, TOPIC, GROUP, QUEUE_ID_0, invisibleTime));
+        assertTrue(queueLevelConsumerManager.checkBlock(null, TOPIC, GROUP, QUEUE_ID_0, invisibleTime));
 
-        assertEquals(5L, consumerOrderInfoManager.commitAndNext(TOPIC, GROUP, QUEUE_ID_0, 2L, popTime));
+        assertEquals(5L, queueLevelConsumerManager.commitAndNext(TOPIC, GROUP, QUEUE_ID_0, 2L, popTime));
         assertEncodeAndDecode();
-        assertFalse(consumerOrderInfoManager.checkBlock(null, TOPIC, GROUP, QUEUE_ID_0, invisibleTime));
+        assertFalse(queueLevelConsumerManager.checkBlock(null, TOPIC, GROUP, QUEUE_ID_0, invisibleTime));
     }
 
     @Test
@@ -387,10 +387,10 @@ public class ConsumerOrderInfoManagerTest {
         TopicConfig topicConfig = new TopicConfig(TOPIC);
         when(topicConfigManager.selectTopicConfig(eq(TOPIC))).thenReturn(topicConfig);
 
-        ConsumerOrderInfoManager consumerOrderInfoManager = new ConsumerOrderInfoManager(brokerController);
+        QueueLevelConsumerManager queueLevelConsumerManager = new QueueLevelConsumerManager(brokerController);
 
         {
-            consumerOrderInfoManager.update(null, false,
+            queueLevelConsumerManager.update(null, false,
                 "errTopic",
                 "errGroup",
                 QUEUE_ID_0,
@@ -399,11 +399,11 @@ public class ConsumerOrderInfoManagerTest {
                 Lists.newArrayList(2L, 3L, 4L),
                 new StringBuilder());
 
-            consumerOrderInfoManager.autoClean();
-            assertEquals(0, consumerOrderInfoManager.getTable().size());
+            queueLevelConsumerManager.autoClean();
+            assertEquals(0, queueLevelConsumerManager.getTable().size());
         }
         {
-            consumerOrderInfoManager.update(null, false,
+            queueLevelConsumerManager.update(null, false,
                 TOPIC,
                 "errGroup",
                 QUEUE_ID_0,
@@ -412,12 +412,12 @@ public class ConsumerOrderInfoManagerTest {
                 Lists.newArrayList(2L, 3L, 4L),
                 new StringBuilder());
 
-            consumerOrderInfoManager.autoClean();
-            assertEquals(0, consumerOrderInfoManager.getTable().size());
+            queueLevelConsumerManager.autoClean();
+            assertEquals(0, queueLevelConsumerManager.getTable().size());
         }
         {
             topicConfig.setReadQueueNums(0);
-            consumerOrderInfoManager.update(null, false,
+            queueLevelConsumerManager.update(null, false,
                 TOPIC,
                 GROUP,
                 QUEUE_ID_0,
@@ -427,13 +427,13 @@ public class ConsumerOrderInfoManagerTest {
                 new StringBuilder());
 
             await().atMost(Duration.ofSeconds(1)).until(() -> {
-                consumerOrderInfoManager.autoClean();
-                return consumerOrderInfoManager.getTable().size() == 0;
+                queueLevelConsumerManager.autoClean();
+                return queueLevelConsumerManager.getTable().size() == 0;
             });
         }
         {
             topicConfig.setReadQueueNums(8);
-            consumerOrderInfoManager.update(null, false,
+            queueLevelConsumerManager.update(null, false,
                 TOPIC,
                 GROUP,
                 QUEUE_ID_0,
@@ -442,9 +442,9 @@ public class ConsumerOrderInfoManagerTest {
                 Lists.newArrayList(2L, 3L, 4L),
                 new StringBuilder());
 
-            consumerOrderInfoManager.autoClean();
-            assertEquals(1, consumerOrderInfoManager.getTable().size());
-            for (ConcurrentHashMap<Integer, ConsumerOrderInfoManager.OrderInfo> orderInfoMap : consumerOrderInfoManager.getTable().values()) {
+            queueLevelConsumerManager.autoClean();
+            assertEquals(1, queueLevelConsumerManager.getTable().size());
+            for (ConcurrentHashMap<Integer, QueueLevelConsumerManager.OrderInfo> orderInfoMap : queueLevelConsumerManager.getTable().values()) {
                 assertEquals(1, orderInfoMap.size());
                 assertNotNull(orderInfoMap.get(QUEUE_ID_0));
                 break;
@@ -453,13 +453,13 @@ public class ConsumerOrderInfoManagerTest {
     }
 
     private void assertEncodeAndDecode() {
-        ConsumerOrderInfoManager.OrderInfo prevOrderInfo = consumerOrderInfoManager.getTable().values().stream().findFirst()
+        QueueLevelConsumerManager.OrderInfo prevOrderInfo = queueLevelConsumerManager.getTable().values().stream().findFirst()
             .get().get(QUEUE_ID_0);
 
-        String dataEncoded = consumerOrderInfoManager.encode();
+        String dataEncoded = queueLevelConsumerManager.encode();
 
-        consumerOrderInfoManager.decode(dataEncoded);
-        ConsumerOrderInfoManager.OrderInfo newOrderInfo = consumerOrderInfoManager.getTable().values().stream().findFirst()
+        queueLevelConsumerManager.decode(dataEncoded);
+        QueueLevelConsumerManager.OrderInfo newOrderInfo = queueLevelConsumerManager.getTable().values().stream().findFirst()
             .get().get(QUEUE_ID_0);
 
         assertNotSame(prevOrderInfo, newOrderInfo);
@@ -474,7 +474,7 @@ public class ConsumerOrderInfoManagerTest {
 
     @Test
     public void testLoadFromOldVersionOrderInfoData() {
-        consumerOrderInfoManager.update(null, false,
+        queueLevelConsumerManager.update(null, false,
             TOPIC,
             GROUP,
             QUEUE_ID_0,
@@ -482,20 +482,20 @@ public class ConsumerOrderInfoManagerTest {
             1,
             Lists.newArrayList(2L, 3L, 4L),
             new StringBuilder());
-        ConsumerOrderInfoManager.OrderInfo orderInfo = consumerOrderInfoManager.getTable().values().stream().findFirst()
+        QueueLevelConsumerManager.OrderInfo orderInfo = queueLevelConsumerManager.getTable().values().stream().findFirst()
             .get().get(QUEUE_ID_0);
 
         orderInfo.setInvisibleTime(null);
         orderInfo.setOffsetConsumedCount(null);
         orderInfo.setOffsetNextVisibleTime(null);
 
-        String dataEncoded = consumerOrderInfoManager.encode();
+        String dataEncoded = queueLevelConsumerManager.encode();
 
-        consumerOrderInfoManager.decode(dataEncoded);
-        assertTrue(consumerOrderInfoManager.checkBlock(null, TOPIC, GROUP, QUEUE_ID_0, 3000));
+        queueLevelConsumerManager.decode(dataEncoded);
+        assertTrue(queueLevelConsumerManager.checkBlock(null, TOPIC, GROUP, QUEUE_ID_0, 3000));
 
         StringBuilder orderInfoBuilder = new StringBuilder();
-        consumerOrderInfoManager.update(null, false,
+        queueLevelConsumerManager.update(null, false,
             TOPIC,
             GROUP,
             QUEUE_ID_0,
@@ -515,7 +515,7 @@ public class ConsumerOrderInfoManagerTest {
     public void testReentrant() {
         StringBuilder orderInfoBuilder = new StringBuilder();
         String attemptId = UUID.randomUUID().toString();
-        consumerOrderInfoManager.update(
+        queueLevelConsumerManager.update(
             attemptId,
             false,
             TOPIC,
@@ -527,7 +527,7 @@ public class ConsumerOrderInfoManagerTest {
             orderInfoBuilder
         );
 
-        assertTrue(consumerOrderInfoManager.checkBlock(null, TOPIC, GROUP, QUEUE_ID_0, 3000));
-        assertFalse(consumerOrderInfoManager.checkBlock(attemptId, TOPIC, GROUP, QUEUE_ID_0, 3000));
+        assertTrue(queueLevelConsumerManager.checkBlock(null, TOPIC, GROUP, QUEUE_ID_0, 3000));
+        assertFalse(queueLevelConsumerManager.checkBlock(attemptId, TOPIC, GROUP, QUEUE_ID_0, 3000));
     }
 }

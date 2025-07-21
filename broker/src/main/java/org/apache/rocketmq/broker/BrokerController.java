@@ -58,7 +58,7 @@ import org.apache.rocketmq.broker.mqtrace.ConsumeMessageHook;
 import org.apache.rocketmq.broker.mqtrace.SendMessageHook;
 import org.apache.rocketmq.broker.offset.BroadcastOffsetManager;
 import org.apache.rocketmq.broker.offset.ConsumerOffsetManager;
-import org.apache.rocketmq.broker.offset.order.ConsumerOrderInfoManager;
+import org.apache.rocketmq.broker.offset.order.FIFOConsumptionManager;
 import org.apache.rocketmq.broker.offset.LmqConsumerOffsetManager;
 import org.apache.rocketmq.broker.out.BrokerOuterAPI;
 import org.apache.rocketmq.broker.plugin.BrokerAttachedPlugin;
@@ -195,7 +195,7 @@ public class BrokerController {
     protected final BroadcastOffsetManager broadcastOffsetManager;
     protected final ConsumerManager consumerManager;
     protected final ConsumerFilterManager consumerFilterManager;
-    protected final ConsumerOrderInfoManager consumerOrderInfoManager;
+    protected final FIFOConsumptionManager fifoConsumptionManager;
     protected final PopInflightMessageCounter popInflightMessageCounter;
     protected final PopConsumerService popConsumerService;
     protected final ProducerManager producerManager;
@@ -377,7 +377,7 @@ public class BrokerController {
         this.consumerManager = new ConsumerManager(this.consumerIdsChangeListener, this.brokerStatsManager, this.brokerConfig);
         this.producerManager = new ProducerManager(this.brokerStatsManager);
         this.consumerFilterManager = new ConsumerFilterManager(this);
-        this.consumerOrderInfoManager = new ConsumerOrderInfoManager(this);
+        this.fifoConsumptionManager = new FIFOConsumptionManager(this);
         this.popInflightMessageCounter = new PopInflightMessageCounter(this);
         this.popConsumerService = brokerConfig.isPopConsumerKVServiceInit() ? new PopConsumerService(this) : null;
         this.clientHousekeepingService = new ClientHousekeepingService(this);
@@ -656,7 +656,7 @@ public class BrokerController {
             public void run() {
                 try {
                     BrokerController.this.consumerFilterManager.persist();
-                    BrokerController.this.consumerOrderInfoManager.persist();
+                    BrokerController.this.fifoConsumptionManager.persist();
                 } catch (Throwable e) {
                     LOG.error(
                         "BrokerController: failed to persist config file of consumerFilter or consumerOrderInfo",
@@ -812,7 +812,7 @@ public class BrokerController {
         result = result && this.consumerOffsetManager.load();
         result = result && this.subscriptionGroupManager.load();
         result = result && this.consumerFilterManager.load();
-        result = result && this.consumerOrderInfoManager.load();
+        result = result && this.fifoConsumptionManager.load();
         return result;
     }
 
@@ -1316,8 +1316,8 @@ public class BrokerController {
         return consumerFilterManager;
     }
 
-    public ConsumerOrderInfoManager getConsumerOrderInfoManager() {
-        return consumerOrderInfoManager;
+    public FIFOConsumptionManager getConsumerOrderInfoManager() {
+        return fifoConsumptionManager;
     }
 
     public PopInflightMessageCounter getPopInflightMessageCounter() {
@@ -1586,9 +1586,9 @@ public class BrokerController {
             this.consumerOffsetManager.stop();
         }
 
-        if (this.consumerOrderInfoManager != null) {
-            this.consumerOrderInfoManager.persist();
-            this.consumerOrderInfoManager.shutdown();
+        if (this.fifoConsumptionManager != null) {
+            this.fifoConsumptionManager.persist();
+            this.fifoConsumptionManager.shutdown();
         }
 
         if (this.configStorage != null) {

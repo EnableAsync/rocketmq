@@ -35,7 +35,7 @@ import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.broker.failover.EscapeBridge;
 import org.apache.rocketmq.broker.longpolling.PopLongPollingService;
 import org.apache.rocketmq.broker.offset.ConsumerOffsetManager;
-import org.apache.rocketmq.broker.offset.order.ConsumerOrderInfoManager;
+import org.apache.rocketmq.broker.offset.order.FIFOConsumptionManager;
 import org.apache.rocketmq.broker.processor.PopMessageProcessor;
 import org.apache.rocketmq.broker.topic.TopicConfigManager;
 import org.apache.rocketmq.common.BrokerConfig;
@@ -96,7 +96,7 @@ public class PopConsumerServiceTest {
         ConsumerOffsetManager consumerOffsetManager = Mockito.mock(ConsumerOffsetManager.class);
         PopMessageProcessor popMessageProcessor = Mockito.mock(PopMessageProcessor.class);
         PopLongPollingService popLongPollingService = Mockito.mock(PopLongPollingService.class);
-        ConsumerOrderInfoManager consumerOrderInfoManager = Mockito.mock(ConsumerOrderInfoManager.class);
+        FIFOConsumptionManager FIFOConsumptionManager = Mockito.mock(FIFOConsumptionManager.class);
 
         brokerController = Mockito.mock(BrokerController.class);
         Mockito.when(brokerController.getBrokerConfig()).thenReturn(brokerConfig);
@@ -105,7 +105,7 @@ public class PopConsumerServiceTest {
         Mockito.when(brokerController.getConsumerOffsetManager()).thenReturn(consumerOffsetManager);
         Mockito.when(brokerController.getPopMessageProcessor()).thenReturn(popMessageProcessor);
         Mockito.when(popMessageProcessor.getPopLongPollingService()).thenReturn(popLongPollingService);
-        Mockito.when(brokerController.getConsumerOrderInfoManager()).thenReturn(consumerOrderInfoManager);
+        Mockito.when(brokerController.getConsumerOrderInfoManager()).thenReturn(FIFOConsumptionManager);
 
         consumerService = new PopConsumerService(brokerController);
     }
@@ -233,7 +233,7 @@ public class PopConsumerServiceTest {
         // fifo block
         PopConsumerContext context = new PopConsumerContext(
             clientHost, System.currentTimeMillis(), 20000, groupId, false, ConsumeInitMode.MIN, attemptId);
-        consumerService.setFifoBlocked(context, groupId, topicId, queueId, Collections.singletonList(100L));
+        consumerService.setFifoBlocked(context, groupId, topicId, queueId, Collections.singletonList(100L), null);
         Mockito.when(brokerController.getConsumerOrderInfoManager()
             .checkBlock(anyString(), anyString(), anyString(), anyInt(), anyLong())).thenReturn(true);
         Assert.assertTrue(consumerService.isFifoBlocked(context, groupId, topicId, queueId));

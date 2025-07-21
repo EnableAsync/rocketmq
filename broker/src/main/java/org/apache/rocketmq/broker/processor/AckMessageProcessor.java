@@ -24,7 +24,7 @@ import java.nio.charset.StandardCharsets;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.broker.metrics.PopMetricsManager;
 import org.apache.rocketmq.broker.offset.ConsumerOffsetManager;
-import org.apache.rocketmq.broker.offset.order.ConsumerOrderInfoManager;
+import org.apache.rocketmq.broker.offset.order.FIFOConsumptionManager;
 import org.apache.rocketmq.broker.pop.PopConsumerLockService;
 import org.apache.rocketmq.common.KeyBuilder;
 import org.apache.rocketmq.common.PopAckConstants;
@@ -430,7 +430,7 @@ public class AckMessageProcessor implements NettyRequestProcessor {
         long invisibleTime, Channel channel, RemotingCommand response) {
 
         ConsumerOffsetManager consumerOffsetManager = this.brokerController.getConsumerOffsetManager();
-        ConsumerOrderInfoManager consumerOrderInfoManager = brokerController.getConsumerOrderInfoManager();
+        FIFOConsumptionManager FIFOConsumptionManager = brokerController.getConsumerOrderInfoManager();
         PopConsumerLockService consumerLockService = this.brokerController.getPopConsumerService().getConsumerLockService();
 
         long oldOffset = consumerOffsetManager.queryOffset(consumeGroup, topic, qId);
@@ -448,7 +448,7 @@ public class AckMessageProcessor implements NettyRequestProcessor {
                 return;
             }
 
-            long nextOffset = consumerOrderInfoManager.commitAndNext(topic, consumeGroup, qId, ackOffset, popTime);
+            long nextOffset = FIFOConsumptionManager.commitAndNext(topic, consumeGroup, qId, ackOffset, popTime);
             if (brokerController.getBrokerConfig().isPopConsumerKVServiceLog()) {
                 POP_LOGGER.info("PopConsumerService ack orderly, time={}, topicId={}, groupId={}, queueId={}, " +
                         "offset={}, next={}", popTime, topic, consumeGroup, qId, ackOffset, nextOffset);
@@ -459,7 +459,7 @@ public class AckMessageProcessor implements NettyRequestProcessor {
                     String remoteAddress = RemotingHelper.parseSocketAddressAddr(channel.remoteAddress());
                     consumerOffsetManager.commitOffset(remoteAddress, consumeGroup, topic, qId, nextOffset);
                 }
-                if (!consumerOrderInfoManager.checkBlock(null, topic, consumeGroup, qId, invisibleTime)) {
+                if (!FIFOConsumptionManager.checkBlock(null, topic, consumeGroup, qId, invisibleTime)) {
                     this.brokerController.getPopMessageProcessor().notifyMessageArriving(topic, qId, consumeGroup);
                 }
                 return;

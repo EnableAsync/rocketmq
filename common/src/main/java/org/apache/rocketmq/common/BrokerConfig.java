@@ -86,7 +86,7 @@ public class BrokerConfig extends BrokerIdentity {
      * Thread numbers for EndTransactionProcessor
      */
     private int endTransactionThreadPoolNums = Math.max(8 + PROCESSOR_NUMBER * 2,
-            sendMessageThreadPoolNums * 4);
+        sendMessageThreadPoolNums * 4);
 
     private int flushConsumerOffsetInterval = 1000 * 5;
 
@@ -336,7 +336,7 @@ public class BrokerConfig extends BrokerIdentity {
 
     /**
      * Whether to lock quorum replicas.
-     *
+     * <p>
      * True: need to lock quorum replicas succeed. False: only need to lock one replica succeed.
      */
     private boolean lockInStrictMode = false;
@@ -400,7 +400,7 @@ public class BrokerConfig extends BrokerIdentity {
     private boolean usePIDColdCtrStrategy = true;
     private long cgColdReadThreshold = 3 * 1024 * 1024;
     private long globalColdReadThreshold = 100 * 1024 * 1024;
-    
+
     /**
      * The interval to fetch namesrv addr, default value is 10 second
      */
@@ -467,6 +467,20 @@ public class BrokerConfig extends BrokerIdentity {
     private boolean enableRegisterProducer = true;
 
     private boolean enableCreateSysGroup = true;
+
+    private OrderedConsumptionLevel orderedConsumptionLevel = OrderedConsumptionLevel.QUEUE;
+
+    public OrderedConsumptionLevel getOrderedConsumptionLevel() {
+        return orderedConsumptionLevel;
+    }
+
+    public void setOrderedConsumptionLevel(OrderedConsumptionLevel orderedConsumptionLevel) {
+        this.orderedConsumptionLevel = orderedConsumptionLevel;
+    }
+
+    public void setOrderedConsumptionLevel(int orderedConsumptionLevel) {
+        this.orderedConsumptionLevel = OrderedConsumptionLevel.valueOf(orderedConsumptionLevel);
+    }
 
     public String getConfigBlackList() {
         return configBlackList;
@@ -1879,11 +1893,11 @@ public class BrokerConfig extends BrokerIdentity {
     public void setUseStaticSubscription(boolean useStaticSubscription) {
         this.useStaticSubscription = useStaticSubscription;
     }
-    
+
     public long getFetchNamesrvAddrInterval() {
         return fetchNamesrvAddrInterval;
     }
-    
+
     public void setFetchNamesrvAddrInterval(final long fetchNamesrvAddrInterval) {
         this.fetchNamesrvAddrInterval = fetchNamesrvAddrInterval;
     }

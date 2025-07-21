@@ -36,14 +36,14 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-public class ConsumerOrderInfoManagerLockFreeNotifyTest {
+public class QueueLevelConsumerManagerLockFreeNotifyTest {
 
     private static final String TOPIC = "topic";
     private static final String GROUP = "group";
     private static final int QUEUE_ID_0 = 0;
 
     private long popTime;
-    private ConsumerOrderInfoManager consumerOrderInfoManager;
+    private QueueLevelConsumerManager queueLevelConsumerManager;
     private AtomicBoolean notified;
 
     private final BrokerConfig brokerConfig = new BrokerConfig();
@@ -61,13 +61,13 @@ public class ConsumerOrderInfoManagerLockFreeNotifyTest {
             return null;
         }).when(popMessageProcessor).notifyLongPollingRequestIfNeed(anyString(), anyString(), anyInt());
 
-        consumerOrderInfoManager = new ConsumerOrderInfoManager(brokerController);
+        queueLevelConsumerManager = new QueueLevelConsumerManager(brokerController);
         popTime = System.currentTimeMillis();
     }
 
     @Test
     public void testConsumeMessageThenNoAck() {
-        consumerOrderInfoManager.update(
+        queueLevelConsumerManager.update(
             null,
             false,
             TOPIC,
@@ -79,12 +79,12 @@ public class ConsumerOrderInfoManagerLockFreeNotifyTest {
             new StringBuilder()
         );
         await().atLeast(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(4)).until(notified::get);
-        assertTrue(consumerOrderInfoManager.getConsumerOrderInfoLockManager().getTimeoutMap().isEmpty());
+        assertTrue(queueLevelConsumerManager.getConsumerOrderInfoLockManager().getTimeoutMap().isEmpty());
     }
 
     @Test
     public void testConsumeMessageThenAck() {
-        consumerOrderInfoManager.update(
+        queueLevelConsumerManager.update(
             null,
             false,
             TOPIC,
@@ -95,7 +95,7 @@ public class ConsumerOrderInfoManagerLockFreeNotifyTest {
             Lists.newArrayList(1L),
             new StringBuilder()
         );
-        consumerOrderInfoManager.commitAndNext(
+        queueLevelConsumerManager.commitAndNext(
             TOPIC,
             GROUP,
             QUEUE_ID_0,
@@ -103,12 +103,12 @@ public class ConsumerOrderInfoManagerLockFreeNotifyTest {
             popTime
         );
         await().atMost(Duration.ofSeconds(1)).until(notified::get);
-        assertTrue(consumerOrderInfoManager.getConsumerOrderInfoLockManager().getTimeoutMap().isEmpty());
+        assertTrue(queueLevelConsumerManager.getConsumerOrderInfoLockManager().getTimeoutMap().isEmpty());
     }
 
     @Test
     public void testConsumeTheChangeInvisibleLonger() {
-        consumerOrderInfoManager.update(
+        queueLevelConsumerManager.update(
             null,
             false,
             TOPIC,
@@ -119,7 +119,7 @@ public class ConsumerOrderInfoManagerLockFreeNotifyTest {
             Lists.newArrayList(1L),
             new StringBuilder()
         );
-        consumerOrderInfoManager.updateNextVisibleTime(
+        queueLevelConsumerManager.updateNextVisibleTime(
             TOPIC,
             GROUP,
             QUEUE_ID_0,
@@ -128,12 +128,12 @@ public class ConsumerOrderInfoManagerLockFreeNotifyTest {
             popTime + 5000
         );
         await().atLeast(Duration.ofSeconds(4)).atMost(Duration.ofSeconds(6)).until(notified::get);
-        assertTrue(consumerOrderInfoManager.getConsumerOrderInfoLockManager().getTimeoutMap().isEmpty());
+        assertTrue(queueLevelConsumerManager.getConsumerOrderInfoLockManager().getTimeoutMap().isEmpty());
     }
 
     @Test
     public void testConsumeTheChangeInvisibleShorter() {
-        consumerOrderInfoManager.update(
+        queueLevelConsumerManager.update(
             null,
             false,
             TOPIC,
@@ -144,7 +144,7 @@ public class ConsumerOrderInfoManagerLockFreeNotifyTest {
             Lists.newArrayList(1L),
             new StringBuilder()
         );
-        consumerOrderInfoManager.updateNextVisibleTime(
+        queueLevelConsumerManager.updateNextVisibleTime(
             TOPIC,
             GROUP,
             QUEUE_ID_0,
@@ -153,13 +153,13 @@ public class ConsumerOrderInfoManagerLockFreeNotifyTest {
             popTime + 1000
         );
         await().atLeast(Duration.ofMillis(500)).atMost(Duration.ofSeconds(2)).until(notified::get);
-        assertTrue(consumerOrderInfoManager.getConsumerOrderInfoLockManager().getTimeoutMap().isEmpty());
+        assertTrue(queueLevelConsumerManager.getConsumerOrderInfoLockManager().getTimeoutMap().isEmpty());
     }
 
     @Test
     public void testRecover() {
-        ConsumerOrderInfoManager savedConsumerOrderInfoManager = new ConsumerOrderInfoManager();
-        savedConsumerOrderInfoManager.update(
+        QueueLevelConsumerManager savedQUeueLevelConsumerManager = new QueueLevelConsumerManager();
+        savedQUeueLevelConsumerManager.update(
             null,
             false,
             TOPIC,
@@ -170,10 +170,10 @@ public class ConsumerOrderInfoManagerLockFreeNotifyTest {
             Lists.newArrayList(1L),
             new StringBuilder()
         );
-        String encodedData = savedConsumerOrderInfoManager.encode();
+        String encodedData = savedQUeueLevelConsumerManager.encode();
 
-        consumerOrderInfoManager.decode(encodedData);
+        queueLevelConsumerManager.decode(encodedData);
         await().atLeast(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(4)).until(notified::get);
-        assertTrue(consumerOrderInfoManager.getConsumerOrderInfoLockManager().getTimeoutMap().isEmpty());
+        assertTrue(queueLevelConsumerManager.getConsumerOrderInfoLockManager().getTimeoutMap().isEmpty());
     }
 }
