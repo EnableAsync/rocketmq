@@ -87,16 +87,15 @@ public class MessageShardingKeyUtil {
                 return DEFAULT_SHARDING_KEY;
             }
 
-            // 解码消息以获取属性
-            List<MessageExt> messageExtList = MessageDecoder.decodesBatch(byteBuffer, true, false, true);
+            // 使用 decodeProperties 直接解析属性
+            Map<String, String> properties = MessageDecoder.decodeProperties(byteBuffer);
 
-            if (!messageExtList.isEmpty()) {
-                MessageExt messageExt = messageExtList.get(0);
-                String shardingKey = messageExt.getProperty(MessageConst.PROPERTY_SHARDING_KEY);
+            if (properties != null) {
+                String shardingKey = properties.get(MessageConst.PROPERTY_SHARDING_KEY);
                 return shardingKey != null ? shardingKey : DEFAULT_SHARDING_KEY;
             }
         } catch (Exception e) {
-            log.warn("Failed to decode message for sharding key extraction", e);
+            log.warn("Failed to decode properties for sharding key extraction", e);
         }
 
         return DEFAULT_SHARDING_KEY;
