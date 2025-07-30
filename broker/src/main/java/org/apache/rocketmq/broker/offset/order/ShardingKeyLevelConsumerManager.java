@@ -33,7 +33,7 @@ import org.apache.rocketmq.store.GetMessageResult;
 /**
  * ShardingKey 级别的顺序消费管理器
  * 实现基于 shardingKey 的并发顺序消费，提升消费吞吐量
- *
+ * <p>
  * 核心设计思路：乐观读取 + 多 shardingKey 并发
  * - 先读取消息，再根据 shardingKey 判断是否阻塞
  * - 只有相同 shardingKey 的消息才会相互阻塞
@@ -74,7 +74,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     /**
      * 检查是否需要阻塞当前的 POP 请求
      * 基于 sharding key 级别的检查，不同的 sharding key 之间不会相互阻塞
-     *
+     * <p>
      * 注意：这里的实现与队列级别不同，这里是先读取数据，再判断是否阻塞
      * 实际的阻塞逻辑在 PopMessageProcessor 中通过 GetMessageResult 进行判断
      */
@@ -84,7 +84,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             // 对于 sharding key 级别，我们总是返回 false，让消息先读取出来
             // 真正的阻塞逻辑在 update 方法中通过分析 sharding key 来实现
             log.debug("CheckBlock for sharding key level: topic={}, group={}, queueId={}, attemptId={}",
-                    topic, group, queueId, attemptId);
+                topic, group, queueId, attemptId);
             return false;
         } catch (Exception e) {
             log.error("Failed to check block for topic: {}, group: {}, queueId: {}", topic, group, queueId, e);
@@ -98,8 +98,8 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
      */
     @Override
     public void update(String attemptId, boolean isRetry, String topic, String group, int queueId,
-                      long popTime, long invisibleTime, List<Long> msgQueueOffsetList,
-                      StringBuilder orderInfoBuilder, GetMessageResult getMessageResult) {
+        long popTime, long invisibleTime, List<Long> msgQueueOffsetList,
+        StringBuilder orderInfoBuilder, GetMessageResult getMessageResult) {
 
         if (msgQueueOffsetList == null || msgQueueOffsetList.isEmpty()) {
             log.warn("Empty message offset list for topic: {}, group: {}, queueId: {}", topic, group, queueId);
@@ -109,34 +109,35 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
         try {
             // 1. 从GetMessageResult中提取sharding key信息
             MessageShardingKeyUtil.MessageShardingInfo shardingInfo =
-                    MessageShardingKeyUtil.extractShardingKeyInfo(getMessageResult);
+                MessageShardingKeyUtil.extractShardingKeyInfo(getMessageResult);
 
             // 2. 按sharding key分组消息并创建锁
             for (Map.Entry<String, List<MessageShardingKeyUtil.MessageInfo>> entry :
-                    shardingInfo.getShardingKeyGroups().entrySet()) {
+                shardingInfo.getShardingKeyGroups().entrySet()) {
 
                 String shardingKey = entry.getKey();
                 List<MessageShardingKeyUtil.MessageInfo> messages = entry.getValue();
+                System.out.println("pop 处理 shardingKey : " + shardingKey);
 
-                // 提取该sharding key对应的offset列表
+                // 提取该sharding key 对应的 offset 列表
                 List<Long> offsets = messages.stream()
-                        .map(MessageShardingKeyUtil.MessageInfo::getOffset)
-                        .collect(java.util.stream.Collectors.toList());
+                    .map(MessageShardingKeyUtil.MessageInfo::getOffset)
+                    .collect(java.util.stream.Collectors.toList());
 
                 // 创建或更新锁
                 lockManager.createOrUpdateLock(topic, group, queueId, shardingKey,
-                        popTime, invisibleTime, attemptId, offsets);
+                    popTime, invisibleTime, attemptId, offsets);
 
-                // 构建顺序信息
-                buildOrderInfo(orderInfoBuilder, topic, group, queueId, shardingKey, messages);
+                // 构建顺序信息，orderInfoBuilder 的实现
+                // buildOrderInfo(orderInfoBuilder, topic, group, queueId, shardingKey, messages);
             }
 
             log.debug("Updated sharding key locks for {} messages in topic: {}, group: {}, queueId: {}",
-                    msgQueueOffsetList.size(), topic, group, queueId);
+                msgQueueOffsetList.size(), topic, group, queueId);
 
         } catch (Exception e) {
             log.error("Failed to update sharding key locks for topic: {}, group: {}, queueId: {}",
-                    topic, group, queueId, e);
+                topic, group, queueId, e);
         }
     }
 
@@ -153,21 +154,20 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
 
             if (released) {
                 log.debug("Successfully released sharding key lock for offset: {} in topic: {}, group: {}, queueId: {}",
-                        queueOffset, topic, group, queueId);
+                    queueOffset, topic, group, queueId);
 
                 // 返回下一个偏移量
                 return queueOffset + 1;
             } else {
                 log.warn("Failed to release sharding key lock for offset: {} in topic: {}, group: {}, queueId: {}",
-                        queueOffset, topic, group, queueId);
+                    queueOffset, topic, group, queueId);
 
                 // 如果释放失败，返回 -2 表示无需提交
                 return -2;
             }
         } catch (Exception e) {
-            System.out.println("!!! EXCEPTION WAS CAUGHT HERE !!!");
             log.error("Failed to commit and next for offset: {} in topic: {}, group: {}, queueId: {}",
-                    queueOffset, topic, group, queueId, e);
+                queueOffset, topic, group, queueId, e);
             return -1; // 返回 -1 表示非法
         }
     }
@@ -178,15 +178,15 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
      */
     @Override
     public void updateNextVisibleTime(String topic, String group, int queueId, long queueOffset,
-                                      long popTime, long nextVisibleTime) {
+        long popTime, long nextVisibleTime) {
         try {
             lockManager.updateNextVisibleTime(topic, group, queueId, queueOffset, popTime, nextVisibleTime);
 
             log.debug("Updated next visible time for offset: {} in topic: {}, group: {}, queueId: {}, nextVisibleTime: {}",
-                    queueOffset, topic, group, queueId, nextVisibleTime);
+                queueOffset, topic, group, queueId, nextVisibleTime);
         } catch (Exception e) {
             log.error("Failed to update next visible time for offset: {} in topic: {}, group: {}, queueId: {}",
-                    queueOffset, topic, group, queueId, e);
+                queueOffset, topic, group, queueId, e);
         }
     }
 
@@ -222,7 +222,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
         try {
             // 启动定时清理任务
             cleanupExecutor = Executors.newSingleThreadScheduledExecutor(
-                    new ThreadFactoryImpl("ShardingKeyLevelConsumerManager_Cleanup_"));
+                new ThreadFactoryImpl("ShardingKeyLevelConsumerManager_Cleanup_"));
 
             // 每5分钟清理一次过期的 attemptId
             cleanupExecutor.scheduleAtFixedRate(() -> {
@@ -335,11 +335,11 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
      * 构建顺序信息
      */
     private void buildOrderInfo(StringBuilder orderInfoBuilder, String topic, String group, int queueId,
-                               String shardingKey, List<MessageShardingKeyUtil.MessageInfo> messages) {
+        String shardingKey, List<MessageShardingKeyUtil.MessageInfo> messages) {
         // 为每个消息构建顺序信息
         for (MessageShardingKeyUtil.MessageInfo messageInfo : messages) {
             ExtraInfoUtil.buildQueueOffsetOrderCountInfo(orderInfoBuilder, topic, queueId,
-                    messageInfo.getOffset(), 0);
+                messageInfo.getOffset(), 0);
         }
 
         // 构建 shardingKey 级别的顺序信息

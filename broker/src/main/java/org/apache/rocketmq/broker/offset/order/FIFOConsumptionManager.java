@@ -30,8 +30,10 @@ public class FIFOConsumptionManager {
 
     public FIFOConsumptionManager(BrokerController brokerController) {
         if (brokerController.getBrokerConfig().getOrderedConsumptionLevel() == OrderedConsumptionLevel.SHARDING_KEY) {
+            System.out.println("使用 shardingKey 级别的顺序消费");
             this.orderedConsumptionManager = new ShardingKeyLevelConsumerManager(brokerController);
         } else {
+            System.out.println("使用 queue 级别的顺序消费");
             this.orderedConsumptionManager = new QueueLevelConsumerManager(brokerController);
         }
     }

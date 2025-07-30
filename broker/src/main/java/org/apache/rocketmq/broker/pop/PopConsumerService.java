@@ -41,6 +41,7 @@ import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.common.BrokerConfig;
 import org.apache.rocketmq.common.KeyBuilder;
 import org.apache.rocketmq.common.MixAll;
+import org.apache.rocketmq.common.OrderedConsumptionLevel;
 import org.apache.rocketmq.common.ServiceThread;
 import org.apache.rocketmq.common.TopicConfig;
 import org.apache.rocketmq.common.TopicFilterType;
@@ -168,6 +169,7 @@ public class PopConsumerService extends ServiceThread {
         if (GetMessageStatus.FOUND.equals(result.getStatus()) && !result.getMessageQueueOffset().isEmpty()) {
             if (context.isFifo()) {
                 this.setFifoBlocked(context, context.getGroupId(), topicId, queueId, result.getMessageQueueOffset(), result);
+                System.out.println("顺序消息返回内容的数量: " + result.getMessageCount() + " 从这个 offset 拉取消息:" + offset + " message queue offset: " + result.getMessageQueueOffset());
             }
             // build response header here
             context.addGetMessageResult(result, topicId, queueId, retryType, offset);
@@ -177,12 +179,17 @@ public class PopConsumerService extends ServiceThread {
                     context.getPopTime(), context.getInvisibleTime(), context.getGroupId(),
                     topicId, queueId, result.getMessageQueueOffset(), context.getAttemptId());
             }
+            System.out.println("context getMessageResultList: " + context.getGetMessageResultList());
         }
 
         long commitOffset = offset;
         if (context.isFifo()) {
-            if (!GetMessageStatus.FOUND.equals(result.getStatus())) {
+            if (brokerConfig.getOrderedConsumptionLevel() == OrderedConsumptionLevel.QUEUE && !GetMessageStatus.FOUND.equals(result.getStatus())) {
                 commitOffset = result.getNextBeginOffset();
+            } else if (brokerConfig.getOrderedConsumptionLevel() == OrderedConsumptionLevel.SHARDING_KEY) {
+                System.out.printf("顺序消息提交 pull offset: %s@%s@%d, %d\n", topicId, context.getGroupId(), queueId, result.getNextBeginOffset());
+                this.brokerController.getConsumerOffsetManager().commitPullOffset(
+                    context.getClientHost(), context.getGroupId(), topicId, queueId, result.getNextBeginOffset());
             }
         } else {
             this.brokerController.getConsumerOffsetManager().commitPullOffset(
@@ -241,6 +248,7 @@ public class PopConsumerService extends ServiceThread {
             if (GetMessageStatus.OFFSET_TOO_SMALL.equals(result.getStatus()) ||
                 GetMessageStatus.OFFSET_OVERFLOW_BADLY.equals(result.getStatus()) ||
                 GetMessageStatus.OFFSET_FOUND_NULL.equals(result.getStatus())) {
+                System.out.println("offset 有问题！！");
 
                 // commit offset, because the offset is not correct
                 // If offset in store is greater than cq offset, it will cause duplicate messages,
@@ -513,7 +521,7 @@ public class PopConsumerService extends ServiceThread {
         Stopwatch stopwatch = Stopwatch.createStarted();
         long upperTime = System.currentTimeMillis() - 50L;
         List<PopConsumerRecord> consumerRecords = this.popConsumerStore.scanExpiredRecords(
-                currentTime.get() - TimeUnit.SECONDS.toMillis(3), upperTime, maxCount);
+            currentTime.get() - TimeUnit.SECONDS.toMillis(3), upperTime, maxCount);
         long scanCostTime = stopwatch.elapsed(TimeUnit.MILLISECONDS);
         Queue<PopConsumerRecord> failureList = new LinkedBlockingQueue<>();
         List<CompletableFuture<?>> futureList = new ArrayList<>(consumerRecords.size());

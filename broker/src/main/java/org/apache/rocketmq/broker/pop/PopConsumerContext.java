@@ -74,7 +74,7 @@ public class PopConsumerContext {
     // offset is consumer last request offset
     public void addGetMessageResult(GetMessageResult result,
         String topicId, int queueId, PopConsumerRecord.RetryType retryType, long offset) {
-
+        System.out.println("addGetMessageResult. MessageQueueOffset: " + result.getMessageQueueOffset());
         if (result.getStatus() != GetMessageStatus.FOUND || result.getMessageQueueOffset().isEmpty()) {
             return;
         }

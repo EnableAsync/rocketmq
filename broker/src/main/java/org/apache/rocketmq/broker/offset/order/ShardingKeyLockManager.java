@@ -137,7 +137,9 @@ public class ShardingKeyLockManager {
         long shardingKeyHash = MessageShardingKeyUtil.calculateShardingKeyHash(shardingKey);
 
         // 记录attemptId
-        attemptIdSet.add(attemptId);
+        if (attemptId != null) {
+            attemptIdSet.add(attemptId);
+        }
 
         // 获取或创建三级Map结构
         ConcurrentHashMap<Integer, ConcurrentHashMap<Long, ShardingKeyLock>> queueMap =
@@ -152,12 +154,13 @@ public class ShardingKeyLockManager {
         // 创建或更新锁
         ShardingKeyLock lock = shardingKeyMap.computeIfAbsent(shardingKeyHash,
             k -> new ShardingKeyLock(popTime, lockFreeTimestamp, attemptId));
+        System.out.println("增加 shardingKey 的锁: " + shardingKey);
 
         // 添加offset到锁中
         for (Long offset : offsets) {
             lock.addOffset(offset);
 
-            // 更新offset到sharding key的映射
+            // 更新 offset 到 sharding key 的映射
             updateOffsetShardingKeyMapping(topicGroupKey, queueId, offset, shardingKeyHash);
         }
 
@@ -239,6 +242,7 @@ public class ShardingKeyLockManager {
 
             // 如果锁为空，则完全释放该sharding key锁
             if (lock.isEmpty()) {
+                System.out.println("释放了 shardingKey 的锁: " + lock);
                 shardingKeyMap.remove(shardingKeyHash);
 
                 // 取消定时任务
@@ -248,6 +252,7 @@ public class ShardingKeyLockManager {
                     shardingKeyHash, topic, group, queueId);
 
                 // 唤醒长轮询
+                System.out.println("唤醒了长轮询");
                 notifyLongPolling(topic, group, queueId);
             }
         }
@@ -352,6 +357,7 @@ public class ShardingKeyLockManager {
             Timeout timeout = timer.newTimeout(new ExpireTimerTask(topic, group, queueId, shardingKeyHash),
                 delay, TimeUnit.MILLISECONDS);
             timeoutMap.put(lockKey, timeout);
+            System.out.println("定时任务: " + timeoutMap);
         } else {
             // 已过期，直接处理
             handleExpiredLock(topic, group, queueId, shardingKeyHash);

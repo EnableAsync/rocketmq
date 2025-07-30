@@ -474,10 +474,6 @@ public class BrokerConfig extends BrokerIdentity {
         return orderedConsumptionLevel;
     }
 
-    public void setOrderedConsumptionLevel(OrderedConsumptionLevel orderedConsumptionLevel) {
-        this.orderedConsumptionLevel = orderedConsumptionLevel;
-    }
-
     public void setOrderedConsumptionLevel(int orderedConsumptionLevel) {
         this.orderedConsumptionLevel = OrderedConsumptionLevel.valueOf(orderedConsumptionLevel);
     }

@@ -388,6 +388,7 @@ public class PopMessageProcessor implements NettyRequestProcessor {
 
             popAsyncFuture.thenApply(result -> {
                 if (result.isFound()) {
+                    System.out.println("Processor result:" + result);
                     response.setCode(ResponseCode.SUCCESS);
                     getMessageResult.setStatus(GetMessageStatus.FOUND);
                     // recursive processing

@@ -89,6 +89,7 @@ public class MessageShardingKeyUtil {
 
             // 使用 decodeProperties 直接解析属性
             Map<String, String> properties = MessageDecoder.decodeProperties(byteBuffer);
+            byteBuffer.rewind();
 
             if (properties != null) {
                 String shardingKey = properties.get(MessageConst.PROPERTY_SHARDING_KEY);
@@ -173,6 +174,15 @@ public class MessageShardingKeyUtil {
 
         public String getShardingKeyByOffset(Long offset) {
             return offsetToShardingKey.get(offset);
+        }
+
+        @Override
+        public String toString() {
+            return "MessageShardingInfo{" +
+                "offsetToShardingKey=" + offsetToShardingKey +
+                ", offsetToIndex=" + offsetToIndex +
+                ", shardingKeyGroups=" + shardingKeyGroups +
+                '}';
         }
     }
 
