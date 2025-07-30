@@ -168,7 +168,8 @@ public class PopConsumerService extends ServiceThread {
         if (GetMessageStatus.FOUND.equals(result.getStatus()) && !result.getMessageQueueOffset().isEmpty()) {
             if (context.isFifo()) {
                 this.setFifoBlocked(context, context.getGroupId(), topicId, queueId, result.getMessageQueueOffset(), result);
-                System.out.println("顺序消息返回内容的数量: " + result.getMessageCount() + " 从这个 offset 拉取消息:" + offset + " message queue offset: " + result.getMessageQueueOffset());
+                // System.out.println("顺序消息返回内容的数量: " + result.getMessageCount() + " 从这个 offset 拉取消息:" + offset + " message queue offset: " + result.getMessageQueueOffset());
+                log.info("顺序消息返回内容的数量: {} 从这个 offset 拉取消息:{} message queue offset: {}", result.getMessageCount(), offset, result.getMessageQueueOffset());
             }
             // build response header here
             context.addGetMessageResult(result, topicId, queueId, retryType, offset);
@@ -178,18 +179,23 @@ public class PopConsumerService extends ServiceThread {
                     context.getPopTime(), context.getInvisibleTime(), context.getGroupId(),
                     topicId, queueId, result.getMessageQueueOffset(), context.getAttemptId());
             }
-            System.out.println("context getMessageResultList: " + context.getGetMessageResultList());
         }
 
         long commitOffset = offset;
         if (context.isFifo()) {
-            if (brokerConfig.getOrderedConsumptionLevel() == OrderedConsumptionLevel.QUEUE && !GetMessageStatus.FOUND.equals(result.getStatus())) {
+            if (!GetMessageStatus.FOUND.equals(result.getStatus())) {
+                // 没找到消息时，提交下一个开始偏移量
                 commitOffset = result.getNextBeginOffset();
-            } else if (brokerConfig.getOrderedConsumptionLevel() == OrderedConsumptionLevel.SHARDING_KEY) {
-                System.out.printf("顺序消息提交 pull offset: %s@%s@%d, %d\n", topicId, context.getGroupId(), queueId, result.getNextBeginOffset());
+                this.brokerController.getConsumerOffsetManager().commitOffset(
+                    context.getClientHost(), context.getGroupId(), topicId, queueId, commitOffset);
+            }
+            if (brokerConfig.getOrderedConsumptionLevel() == OrderedConsumptionLevel.SHARDING_KEY) {
+                // shardingKey 级别需要更新 pull offset 避免重复消费
+                log.info("顺序消息提交 pull offset: {}|{}|{}, {}", topicId, context.getGroupId(), queueId, result.getNextBeginOffset());
                 this.brokerController.getConsumerOffsetManager().commitPullOffset(
                     context.getClientHost(), context.getGroupId(), topicId, queueId, result.getNextBeginOffset());
             }
+            return context;
         } else {
             this.brokerController.getConsumerOffsetManager().commitPullOffset(
                 context.getClientHost(), context.getGroupId(), topicId, queueId, result.getNextBeginOffset());
@@ -247,7 +253,6 @@ public class PopConsumerService extends ServiceThread {
             if (GetMessageStatus.OFFSET_TOO_SMALL.equals(result.getStatus()) ||
                 GetMessageStatus.OFFSET_OVERFLOW_BADLY.equals(result.getStatus()) ||
                 GetMessageStatus.OFFSET_FOUND_NULL.equals(result.getStatus())) {
-                System.out.println("offset 有问题！！");
 
                 // commit offset, because the offset is not correct
                 // If offset in store is greater than cq offset, it will cause duplicate messages,
@@ -553,16 +558,16 @@ public class PopConsumerService extends ServiceThread {
             upperTime : consumerRecords.get(consumerRecords.size() - 1).getVisibilityTimeout());
 
         if (brokerConfig.isEnablePopBufferMerge()) {
-            log.info("PopConsumerService, key size={}, cache size={}, revive count={}, failure count={}, " +
-                    "behindInMillis={}, scanInMillis={}, costInMillis={}",
-                popConsumerCache.getCacheKeySize(), popConsumerCache.getCacheSize(),
-                consumerRecords.size(), failureList.size(), upperTime - currentTime.get(),
-                scanCostTime, stopwatch.elapsed(TimeUnit.MILLISECONDS));
+//            log.info("PopConsumerService, key size={}, cache size={}, revive count={}, failure count={}, " +
+//                    "behindInMillis={}, scanInMillis={}, costInMillis={}",
+//                popConsumerCache.getCacheKeySize(), popConsumerCache.getCacheSize(),
+//                consumerRecords.size(), failureList.size(), upperTime - currentTime.get(),
+//                scanCostTime, stopwatch.elapsed(TimeUnit.MILLISECONDS));
         } else {
-            log.info("PopConsumerService, revive count={}, failure count={}, " +
-                    "behindInMillis={}, scanInMillis={}, costInMillis={}",
-                consumerRecords.size(), failureList.size(), upperTime - currentTime.get(),
-                scanCostTime, stopwatch.elapsed(TimeUnit.MILLISECONDS));
+//            log.info("PopConsumerService, revive count={}, failure count={}, " +
+//                    "behindInMillis={}, scanInMillis={}, costInMillis={}",
+//                consumerRecords.size(), failureList.size(), upperTime - currentTime.get(),
+//                scanCostTime, stopwatch.elapsed(TimeUnit.MILLISECONDS));
         }
 
         return consumerRecords.size();

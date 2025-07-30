@@ -197,6 +197,9 @@ public class ConsumerOffsetManager extends ConfigManager {
 
     public void commitOffset(final String clientHost, final String group, final String topic, final int queueId,
         final long offset) {
+        if (!topic.equals("DefaultHeartBeatSyncerTopic")) {
+            LOG.info("commit offset 被更新了, clientHost={}, group={}, topic={}, queueId={}, offset={}", clientHost, group, topic, queueId, offset);
+        }
         // topic@group
         String key = topic + TOPIC_GROUP_SEPARATOR + group;
         this.commitOffset(clientHost, key, queueId, offset);

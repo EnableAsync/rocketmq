@@ -479,10 +479,6 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             }
 
             response.setRemark(null);
-
-            if (!msg.getTopic().equals("DefaultHeartBeatSyncerTopic")) {
-                System.out.println("发送消息返回 offset: " + putMessageResult.getAppendMessageResult().getLogicsOffset() + " topic: " + msg.getTopic());
-            }
             responseHeader.setMsgId(putMessageResult.getAppendMessageResult().getMsgId());
             responseHeader.setQueueId(queueIdInt);
             responseHeader.setQueueOffset(putMessageResult.getAppendMessageResult().getLogicsOffset());

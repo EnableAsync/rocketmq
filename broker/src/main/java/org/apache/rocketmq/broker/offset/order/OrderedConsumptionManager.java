@@ -58,7 +58,7 @@ public interface OrderedConsumptionManager {
      * @param queueId 队列ID
      * @param queueOffset 消息的队列偏移量
      * @param popTime 弹出时间，用于验证
-     * @return -1:非法, -2:无需提交, >=0:需要提交的偏移量
+     * @return -1:非法, -2:无需提交, >=0:需要提交的偏移量(表明小于这个偏移量的消息已经被消费)
      */
     long commitAndNext(String topic, String group, int queueId, long queueOffset, long popTime);
 

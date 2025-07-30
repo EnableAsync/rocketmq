@@ -21,6 +21,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import java.util.BitSet;
 import java.nio.charset.StandardCharsets;
+import org.apache.commons.logging.Log;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.broker.metrics.PopMetricsManager;
 import org.apache.rocketmq.broker.offset.ConsumerOffsetManager;
@@ -55,6 +56,7 @@ import org.apache.rocketmq.store.pop.BatchAckMsg;
 public class AckMessageProcessor implements NettyRequestProcessor {
 
     private static final Logger POP_LOGGER = LoggerFactory.getLogger(LoggerName.ROCKETMQ_POP_LOGGER_NAME);
+    private static final Logger log = LoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
     private final BrokerController brokerController;
     private final String reviveTopic;
     private final PopReviveService[] popReviveServices;
@@ -435,6 +437,7 @@ public class AckMessageProcessor implements NettyRequestProcessor {
 
         long oldOffset = consumerOffsetManager.queryOffset(consumeGroup, topic, qId);
         if (ackOffset < oldOffset) {
+            log.warn("ack 错误，ack offset < old offset, ackOffset:{}, oldOffset:{}", ackOffset, oldOffset);
             return;
         }
 
@@ -445,12 +448,14 @@ public class AckMessageProcessor implements NettyRequestProcessor {
             // double check
             oldOffset = consumerOffsetManager.queryOffset(consumeGroup, topic, qId);
             if (ackOffset < oldOffset) {
+                log.warn("二次检查 ack 错误，ack offset < old offset, ackOffset:{}, oldOffset:{}", ackOffset, oldOffset);
                 return;
             }
 
             long nextOffset = FIFOConsumptionManager.commitAndNext(topic, consumeGroup, qId, ackOffset, popTime);
+            log.info("顺序消息 ack 完成，ackOffset:{}, nextOffset:{}", ackOffset, nextOffset);
             if (brokerController.getBrokerConfig().isPopConsumerKVServiceLog()) {
-                POP_LOGGER.info("PopConsumerService ack orderly, time={}, topicId={}, groupId={}, queueId={}, " +
+                log.info("PopConsumerService ack orderly, time={}, topicId={}, groupId={}, queueId={}, " +
                         "offset={}, next={}", popTime, topic, consumeGroup, qId, ackOffset, nextOffset);
             }
 

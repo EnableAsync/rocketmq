@@ -24,6 +24,7 @@ import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.common.OrderedConsumptionLevel;
 import org.apache.rocketmq.common.ThreadFactoryImpl;
@@ -49,6 +50,12 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     private final BrokerController brokerController;
     private final ShardingKeyLockManager lockManager;
     private final ShardingKeyCache cache;
+
+    /**
+     * 记录 in-flight 消息最小 offset
+     * 用于 ack 消息时 commit 位点
+     */
+    private final AtomicLong minOffset = new AtomicLong(Long.MAX_VALUE);
 
     // 定时清理任务
     private ScheduledExecutorService cleanupExecutor;
@@ -109,6 +116,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             // List<Integer> availableIndices = new ArrayList<>();
             Map<String, List<Long>> availableShardingKeyOffsets = new HashMap<>();
 
+            long batchMinOffset = Long.MAX_VALUE;
             // 从GetMessageResult中提取sharding key信息
             for (int i = 0; i < getMessageResult.getMessageBufferList().size(); i++) {
                 ByteBuffer byteBuffer = getMessageResult.getMessageBufferList().get(i);
@@ -118,6 +126,10 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
                     unavailableShardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(msgQueueOffsetList.get(i));
                 } else {
                     // availableIndices.add(i);
+                    log.info("分发出去的消息的 offset 是: {}", msgQueueOffsetList.get(i));
+                    // 记录 in-flight 消息最小 offset
+                    batchMinOffset = Math.min(batchMinOffset, msgQueueOffsetList.get(i));
+                    // 记录可消费的消息
                     availableShardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(msgQueueOffsetList.get(i));
                 }
             }
@@ -134,6 +146,10 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             for (Map.Entry<String, List<Long>> entry : availableShardingKeyOffsets.entrySet()) {
                 lockManager.createOrUpdateLock(topic, group, queueId, entry.getKey(), popTime, invisibleTime, attemptId, entry.getValue());
             }
+
+            // 记录 in-flight 消息的最小 offset
+            minOffset.accumulateAndGet(batchMinOffset, Math::min);
+            log.info("当前 in-flight 消息的 offset 最小值为: {}", minOffset.get());
 
             log.debug("Updated sharding key locks for {} messages in topic: {}, group: {}, queueId: {}",
                 msgQueueOffsetList.size(), topic, group, queueId);
@@ -155,11 +171,19 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             boolean released = lockManager.releaseLock(topic, group, queueId, queueOffset, popTime);
 
             if (released) {
-                log.debug("Successfully released sharding key lock for offset: {} in topic: {}, group: {}, queueId: {}",
+                log.info("Successfully released sharding key lock for offset: {} in topic: {}, group: {}, queueId: {}",
                     queueOffset, topic, group, queueId);
 
                 // 返回下一个偏移量
-                return queueOffset + 1;
+                return minOffset.updateAndGet(current -> {
+                   if (current == queueOffset) {
+                       log.info("当前提交的位点 {} 和最小值相等，更新最小值为: {}", current, current + 1);
+                       return current + 1;
+                   } else {
+                       log.info("当前提交的位点 {} 和最小值不同，更新最小值不变", current);
+                       return current;
+                   }
+                });
             } else {
                 log.warn("Failed to release sharding key lock for offset: {} in topic: {}, group: {}, queueId: {}",
                     queueOffset, topic, group, queueId);
@@ -304,15 +328,11 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     public void persist() {
         try {
             // 简化实现：记录统计信息
-            if (lockManager != null) {
-                String stats = lockManager.getStatistics();
-                log.debug("ShardingKeyLockManager statistics: {}", stats);
-            }
+            String stats = lockManager.getStatistics();
+            log.debug("ShardingKeyLockManager statistics: {}", stats);
 
-            if (cache != null) {
-                ShardingKeyCache.CacheStatistics cacheStats = cache.getStatistics();
-                log.debug("ShardingKeyCache statistics: {}", cacheStats);
-            }
+            ShardingKeyCache.CacheStatistics cacheStats = cache.getStatistics();
+            log.debug("ShardingKeyCache statistics: {}", cacheStats);
         } catch (Exception e) {
             log.error("Failed to persist ShardingKeyLevelConsumerManager state", e);
         }
