@@ -16,6 +16,9 @@
  */
 package org.apache.rocketmq.broker.offset.order;
 
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
@@ -50,12 +53,6 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     // 定时清理任务
     private ScheduledExecutorService cleanupExecutor;
     private volatile boolean started = false;
-
-    public ShardingKeyLevelConsumerManager() {
-        this.brokerController = null;
-        this.lockManager = null;
-        this.cache = null;
-    }
 
     public ShardingKeyLevelConsumerManager(BrokerController brokerController) {
         this.brokerController = brokerController;
@@ -101,35 +98,41 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
         long popTime, long invisibleTime, List<Long> msgQueueOffsetList,
         StringBuilder orderInfoBuilder, GetMessageResult getMessageResult) {
 
-        if (msgQueueOffsetList == null || msgQueueOffsetList.isEmpty()) {
+        if (msgQueueOffsetList == null || msgQueueOffsetList.isEmpty() || getMessageResult == null) {
             log.warn("Empty message offset list for topic: {}, group: {}, queueId: {}", topic, group, queueId);
             return;
         }
 
         try {
-            // 1. 从GetMessageResult中提取sharding key信息
-            MessageShardingKeyUtil.MessageShardingInfo shardingInfo =
-                MessageShardingKeyUtil.extractShardingKeyInfo(getMessageResult);
+            List<Integer> unavailableIndices = new ArrayList<>();
+            Map<String, List<Long>> unavailableShardingKeyOffsets = new HashMap<>();
+            // List<Integer> availableIndices = new ArrayList<>();
+            Map<String, List<Long>> availableShardingKeyOffsets = new HashMap<>();
 
-            // 2. 按sharding key分组消息并创建锁
-            for (Map.Entry<String, List<MessageShardingKeyUtil.MessageInfo>> entry :
-                shardingInfo.getShardingKeyGroups().entrySet()) {
+            // 从GetMessageResult中提取sharding key信息
+            for (int i = 0; i < getMessageResult.getMessageBufferList().size(); i++) {
+                ByteBuffer byteBuffer = getMessageResult.getMessageBufferList().get(i);
+                String shardingKey = MessageShardingKeyUtil.extractShardingKeyFromBuffer(byteBuffer);
+                if (lockManager.isLocked(topic, group, queueId, shardingKey, attemptId)) {
+                    unavailableIndices.add(i);
+                    unavailableShardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(msgQueueOffsetList.get(i));
+                } else {
+                    // availableIndices.add(i);
+                    availableShardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(msgQueueOffsetList.get(i));
+                }
+            }
 
-                String shardingKey = entry.getKey();
-                List<MessageShardingKeyUtil.MessageInfo> messages = entry.getValue();
-                System.out.println("pop 处理 shardingKey : " + shardingKey);
+            // 记录未消费的消息
+            for (Map.Entry<String, List<Long>> entry : unavailableShardingKeyOffsets.entrySet()) {
+                cache.addUnavailableMessage(topic, group, queueId, entry.getKey(), entry.getValue());
+            }
 
-                // 提取该sharding key 对应的 offset 列表
-                List<Long> offsets = messages.stream()
-                    .map(MessageShardingKeyUtil.MessageInfo::getOffset)
-                    .collect(java.util.stream.Collectors.toList());
+            // 移除被阻塞的消息
+            getMessageResult.removeIndices(unavailableIndices);
 
-                // 创建或更新锁
-                lockManager.createOrUpdateLock(topic, group, queueId, shardingKey,
-                    popTime, invisibleTime, attemptId, offsets);
-
-                // 构建顺序信息，orderInfoBuilder 的实现
-                // buildOrderInfo(orderInfoBuilder, topic, group, queueId, shardingKey, messages);
+            // 创建锁
+            for (Map.Entry<String, List<Long>> entry : availableShardingKeyOffsets.entrySet()) {
+                lockManager.createOrUpdateLock(topic, group, queueId, entry.getKey(), popTime, invisibleTime, attemptId, entry.getValue());
             }
 
             log.debug("Updated sharding key locks for {} messages in topic: {}, group: {}, queueId: {}",
@@ -149,7 +152,6 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     public long commitAndNext(String topic, String group, int queueId, long queueOffset, long popTime) {
         try {
             // 根据 offset 释放对应的 sharding key 锁
-            assert lockManager != null;
             boolean released = lockManager.releaseLock(topic, group, queueId, queueOffset, popTime);
 
             if (released) {

@@ -18,8 +18,11 @@ package org.apache.rocketmq.store;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 
 public class GetMessageResult {
 
@@ -135,6 +138,22 @@ public class GetMessageResult {
     public void addMessage(final SelectMappedBufferResult mapedBuffer, final long queueOffset, final int batchNum) {
         addMessage(mapedBuffer, queueOffset);
         messageCount += batchNum - 1;
+    }
+
+    public void removeIndices(List<Integer> indices) {
+        if (indices.isEmpty()) {
+            return;
+        }
+        indices.sort(Collections.reverseOrder());
+        for (int index : indices) {
+            this.bufferTotalSize -= messageMapedList.get(index).getSize();
+            this.msgCount4Commercial -= (int) Math.ceil(
+                messageMapedList.get(index).getSize() /  (double)commercialSizePerMsg);
+            this.messageCount--;
+            this.messageQueueOffset.remove(index);
+            messageMapedList.remove(index);
+            messageBufferList.remove(index);
+        }
     }
 
     public void release() {

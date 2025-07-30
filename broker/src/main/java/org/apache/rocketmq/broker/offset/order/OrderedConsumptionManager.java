@@ -29,6 +29,7 @@ public interface OrderedConsumptionManager {
      * @param invisibleTime 消息不可见时间
      * @param msgQueueOffsetList 消息的队列偏移量列表
      * @param orderInfoBuilder 用于构建顺序信息的字符串构建器
+     * @param getMessageResult 返回新的 result
      */
     void update(String attemptId, boolean isRetry, String topic, String group, int queueId,
         long popTime, long invisibleTime, List<Long> msgQueueOffsetList,

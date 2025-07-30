@@ -140,13 +140,13 @@ public class ShardingKeyCacheTest {
         }
 
         // 获取可用消息
-        List<ShardingKeyCache.AvailableMessage> messages = cache.getAvailableMessages(topic, group, queueId, 3);
+        List<ShardingKeyCache.CachedMessage> messages = cache.getAvailableMessages(topic, group, queueId, 3);
 
         assertNotNull("messages should not be null", messages);
         assertEquals("should get 3 messages", 3, messages.size());
 
         // 验证消息属性
-        for (ShardingKeyCache.AvailableMessage message : messages) {
+        for (ShardingKeyCache.CachedMessage message : messages) {
             assertEquals("topic should match", topic, message.getTopic());
             assertEquals("group should match", group, message.getGroup());
             assertEquals("queueId should match", queueId, message.getQueueId());
@@ -174,7 +174,7 @@ public class ShardingKeyCacheTest {
         String group = "testGroup";
         int queueId = 1;
 
-        List<ShardingKeyCache.AvailableMessage> messages = cache.getAvailableMessages(topic, group, queueId, 5);
+        List<ShardingKeyCache.CachedMessage> messages = cache.getAvailableMessages(topic, group, queueId, 5);
 
         assertNotNull("messages should not be null", messages);
         assertTrue("messages should be empty", messages.isEmpty());
@@ -202,14 +202,14 @@ public class ShardingKeyCacheTest {
         }
 
         // 获取特定 sharding key 的消息
-        List<ShardingKeyCache.AvailableMessage> messages = cache.getAvailableMessagesByShardingKey(
+        List<ShardingKeyCache.CachedMessage> messages = cache.getAvailableMessagesByShardingKey(
                 topic, group, queueId, targetShardingKey, 2);
 
         assertNotNull("messages should not be null", messages);
         assertEquals("should get 2 messages", 2, messages.size());
 
         // 验证所有消息都有正确的 sharding key
-        for (ShardingKeyCache.AvailableMessage message : messages) {
+        for (ShardingKeyCache.CachedMessage message : messages) {
             assertEquals("shardingKey should match", targetShardingKey, message.getShardingKey());
         }
 
@@ -232,7 +232,7 @@ public class ShardingKeyCacheTest {
         cache.addAvailableMessage(topic, group, queueId, "user123", messageResult);
 
         // 查找不存在的 sharding key
-        List<ShardingKeyCache.AvailableMessage> messages = cache.getAvailableMessagesByShardingKey(
+        List<ShardingKeyCache.CachedMessage> messages = cache.getAvailableMessagesByShardingKey(
                 topic, group, queueId, "user999", 5);
 
         assertNotNull("messages should not be null", messages);
@@ -320,7 +320,7 @@ public class ShardingKeyCacheTest {
         cache.addAvailableMessage(topic, group, queueId, "user123", messageResult);
 
         // 命中缓存
-        List<ShardingKeyCache.AvailableMessage> messages = cache.getAvailableMessages(topic, group, queueId, 1);
+        List<ShardingKeyCache.CachedMessage> messages = cache.getAvailableMessages(topic, group, queueId, 1);
         assertEquals("should get 1 message", 1, messages.size());
 
         // 未命中缓存
@@ -416,7 +416,7 @@ public class ShardingKeyCacheTest {
         String shardingKey = "user123";
         GetMessageResult messageResult = createTestGetMessageResult();
 
-        ShardingKeyCache.AvailableMessage message = new ShardingKeyCache.AvailableMessage(
+        ShardingKeyCache.CachedMessage message = new ShardingKeyCache.CachedMessage(
                 topic, group, queueId, shardingKey, messageResult);
 
         // 验证属性

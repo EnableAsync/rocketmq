@@ -299,7 +299,10 @@ Set<String/* attemptId */> attemptId = new ConcurrentHashMap.newKeySet();
 - 优先考虑性能和用户体验
 - 确保代码的可读性和可维护性
 
-OrderedConsumptionManager 接口中定义了顺序消息的管理接口，原先的方法的实现是 QueueLevelConsumerManager，
+~~OrderedConsumptionManager 接口中定义了顺序消息的管理接口，原先的方法的实现是 QueueLevelConsumerManager，
 现在需要你帮我根据上面的开发原则实现一下 src/main/java/org/apache/rocketmq/broker/offset/order/ShardingKeyLevelConsumerManager.java，
-并且增加单元测试。
+并且增加单元测试。~~
+
+当前的 org.apache.rocketmq.broker.offset.order.ShardingKeyLevelConsumerManager.update 的实现有问题，
+他应该将传入的 getMessageResult 当中被阻塞的 shardingKey 的 result 给删去，然后返回其他 result 给用户并加锁。
 产生的 markdown 文件写在 todo 文件夹下，java 文件在他应该所在的位置

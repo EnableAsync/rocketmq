@@ -17,14 +17,15 @@
 package org.apache.rocketmq.broker.offset.order;
 
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.apache.commons.codec.digest.MurmurHash3;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.common.message.MessageConst;
 import org.apache.rocketmq.common.message.MessageDecoder;
-import org.apache.rocketmq.common.message.MessageExt;
 import org.apache.rocketmq.logging.org.slf4j.Logger;
 import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
 import org.apache.rocketmq.store.GetMessageResult;
@@ -63,11 +64,42 @@ public class MessageShardingKeyUtil {
             SelectMappedBufferResult mappedBuffer = messageMapedList.get(i);
             Long offset = i < messageQueueOffsetList.size() ? messageQueueOffsetList.get(i) : -1L;
 
-            String shardingKey = extractShardingKeyFromBuffer(mappedBuffer);
+            String shardingKey = extractShardingKeyFromMappedBuffer(mappedBuffer);
             shardingInfo.addMessage(offset, shardingKey, i);
         }
 
         return shardingInfo;
+    }
+
+    public static String extractShardingKeyHashFromBuffer(ByteBuffer byteBuffer) {
+        return calculateHashKey(extractShardingKeyFromBuffer(byteBuffer));
+    }
+
+    /**
+     * 从 ByteBuffer 中提取 sharding key
+     *
+     * @param byteBuffer 消息缓冲区
+     * @return sharding key，如果没有则返回默认值
+     */
+    public static String extractShardingKeyFromBuffer(ByteBuffer byteBuffer) {
+        if (byteBuffer == null) {
+            return DEFAULT_SHARDING_KEY;
+        }
+
+        try {
+            // 使用 decodeProperties 直接解析属性
+            Map<String, String> properties = MessageDecoder.decodeProperties(byteBuffer);
+            byteBuffer.rewind();
+
+            if (properties != null) {
+                String shardingKey = properties.get(MessageConst.PROPERTY_SHARDING_KEY);
+                return shardingKey != null ? shardingKey : DEFAULT_SHARDING_KEY;
+            }
+        } catch (Exception e) {
+            log.warn("Failed to decode properties for sharding key extraction", e);
+        }
+
+        return DEFAULT_SHARDING_KEY;
     }
 
     /**
@@ -76,7 +108,7 @@ public class MessageShardingKeyUtil {
      * @param mappedBuffer 消息缓冲区
      * @return sharding key，如果没有则返回默认值
      */
-    public static String extractShardingKeyFromBuffer(SelectMappedBufferResult mappedBuffer) {
+    public static String extractShardingKeyFromMappedBuffer(SelectMappedBufferResult mappedBuffer) {
         if (mappedBuffer == null) {
             return DEFAULT_SHARDING_KEY;
         }
@@ -103,13 +135,25 @@ public class MessageShardingKeyUtil {
     }
 
     /**
-     * 计算 sharding key 的哈希值（用于分片）
+     * 将长字符串通过 MurmurHash3 转换为一个固定长度的、适合做 Key 的十六进制字符串。
+     * @param input 原始字符串
+     * @return 32个字符的十六进制字符串 Key
      */
-    public static long calculateShardingKeyHash(String shardingKey) {
-        if (shardingKey == null || shardingKey.isEmpty()) {
-            return DEFAULT_SHARDING_KEY.hashCode();
+    public static String calculateHashKey(String input) {
+        if (input == null) {
+            long[] hash = MurmurHash3.hash128(DEFAULT_SHARDING_KEY);
+            long h1 = hash[0];
+            long h2 = hash[1];
+            return String.format("%016x%016x", h1, h2);
         }
-        return Math.abs(shardingKey.hashCode());
+        byte[] data = input.getBytes(StandardCharsets.UTF_8);
+        long[] hash = MurmurHash3.hash128(data);
+        long h1 = hash[0];
+        long h2 = hash[1];
+        // 使用 String.format 进行零填充的十六进制转换
+        // %016x 表示：0-补零，16-总长度16位，x-转为小写十六进制
+        // 最终得到一个 16 + 16 = 32 个字符的字符串
+        return String.format("%016x%016x", h1, h2);
     }
 
     /**

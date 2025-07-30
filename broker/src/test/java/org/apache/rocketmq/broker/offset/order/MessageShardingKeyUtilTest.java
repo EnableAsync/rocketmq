@@ -51,35 +51,35 @@ public class MessageShardingKeyUtilTest {
     public void testCalculateShardingKeyHash() {
         // 测试正常的 sharding key
         String shardingKey1 = "user123";
-        Long hash1 = MessageShardingKeyUtil.calculateShardingKeyHash(shardingKey1);
+        String hash1 = MessageShardingKeyUtil.calculateHashKey(shardingKey1);
         assertNotNull("hash should not be null", hash1);
         
         // 测试相同的 sharding key 应该产生相同的 hash
-        Long hash1Again = MessageShardingKeyUtil.calculateShardingKeyHash(shardingKey1);
+        String hash1Again = MessageShardingKeyUtil.calculateHashKey(shardingKey1);
         assertEquals("same sharding key should produce same hash", hash1, hash1Again);
         
         // 测试不同的 sharding key 应该产生不同的 hash（大概率）
         String shardingKey2 = "user456";
-        Long hash2 = MessageShardingKeyUtil.calculateShardingKeyHash(shardingKey2);
+        String hash2 = MessageShardingKeyUtil.calculateHashKey(shardingKey2);
         assertNotNull("hash2 should not be null", hash2);
         assertThat(hash1).isNotEqualTo(hash2);
         
         // 测试 null sharding key
-        Long hashNull = MessageShardingKeyUtil.calculateShardingKeyHash(null);
+        String hashNull = MessageShardingKeyUtil.calculateHashKey(null);
         assertNotNull("hash for null should not be null", hashNull);
         
         // 测试空字符串
-        Long hashEmpty = MessageShardingKeyUtil.calculateShardingKeyHash("");
+        String hashEmpty = MessageShardingKeyUtil.calculateHashKey("");
         assertNotNull("hash for empty string should not be null", hashEmpty);
         
         // 测试特殊字符
         String specialKey = "user@#$%^&*()_+-={}[]|\\:;\"'<>?,./";
-        Long hashSpecial = MessageShardingKeyUtil.calculateShardingKeyHash(specialKey);
+        String hashSpecial = MessageShardingKeyUtil.calculateHashKey(specialKey);
         assertNotNull("hash for special characters should not be null", hashSpecial);
         
         // 测试中文字符
         String chineseKey = "用户123";
-        Long hashChinese = MessageShardingKeyUtil.calculateShardingKeyHash(chineseKey);
+        String hashChinese = MessageShardingKeyUtil.calculateHashKey(chineseKey);
         assertNotNull("hash for chinese characters should not be null", hashChinese);
     }
 
@@ -156,7 +156,7 @@ public class MessageShardingKeyUtilTest {
      * 测试 extractShardingKeyFromBuffer 方法 - 正常情况
      */
     @Test
-    public void testExtractShardingKeyFromBuffer_Normal() throws Exception {
+    public void testExtractShardingKeyFromMappedBuffer_Normal() throws Exception {
         // 创建包含 sharding key 的消息
         Map<String, String> properties = new HashMap<>();
         properties.put(MessageConst.PROPERTY_SHARDING_KEY, "user123");
@@ -171,7 +171,7 @@ public class MessageShardingKeyUtilTest {
         when(bufferResult.getSize()).thenReturn(messageBytes.length);
         when(bufferResult.getStartOffset()).thenReturn(0L);
 
-        String extractedKey = MessageShardingKeyUtil.extractShardingKeyFromBuffer(bufferResult);
+        String extractedKey = MessageShardingKeyUtil.extractShardingKeyFromMappedBuffer(bufferResult);
         // 由于实现逻辑的原因，这里可能返回默认值或消息ID，不一定是"user123"
         assertNotNull("extracted sharding key should not be null", extractedKey);
     }
@@ -180,7 +180,7 @@ public class MessageShardingKeyUtilTest {
      * 测试 extractShardingKeyFromBuffer 方法 - 没有 sharding key
      */
     @Test
-    public void testExtractShardingKeyFromBuffer_NoShardingKey() throws Exception {
+    public void testExtractShardingKeyFromBuffer_NoShardingKeyMapped() throws Exception {
         // 创建不包含 sharding key 的消息
         Map<String, String> properties = new HashMap<>();
         properties.put("other_property", "other_value");
@@ -194,7 +194,7 @@ public class MessageShardingKeyUtilTest {
         when(bufferResult.getSize()).thenReturn(messageBytes.length);
         when(bufferResult.getStartOffset()).thenReturn(0L);
 
-        String extractedKey = MessageShardingKeyUtil.extractShardingKeyFromBuffer(bufferResult);
+        String extractedKey = MessageShardingKeyUtil.extractShardingKeyFromMappedBuffer(bufferResult);
         assertNotNull("extracted sharding key should not be null", extractedKey);
     }
 
@@ -202,8 +202,8 @@ public class MessageShardingKeyUtilTest {
      * 测试 extractShardingKeyFromBuffer 方法 - null buffer
      */
     @Test
-    public void testExtractShardingKeyFromBuffer_NullBuffer() {
-        String extractedKey = MessageShardingKeyUtil.extractShardingKeyFromBuffer(null);
+    public void testExtractShardingKeyFromBuffer_NullMappedBuffer() {
+        String extractedKey = MessageShardingKeyUtil.extractShardingKeyFromMappedBuffer((SelectMappedBufferResult) null);
         assertEquals("extracted sharding key should be default for null buffer",
                 MessageShardingKeyUtil.DEFAULT_SHARDING_KEY, extractedKey);
     }
@@ -212,12 +212,12 @@ public class MessageShardingKeyUtilTest {
      * 测试 extractShardingKeyFromBuffer 方法 - 空 buffer
      */
     @Test
-    public void testExtractShardingKeyFromBuffer_EmptyBuffer() {
+    public void testExtractShardingKeyFromBuffer_EmptyMappedBuffer() {
         SelectMappedBufferResult bufferResult = mock(SelectMappedBufferResult.class);
         when(bufferResult.getByteBuffer()).thenReturn(ByteBuffer.allocate(0));
         when(bufferResult.getSize()).thenReturn(0);
 
-        String extractedKey = MessageShardingKeyUtil.extractShardingKeyFromBuffer(bufferResult);
+        String extractedKey = MessageShardingKeyUtil.extractShardingKeyFromMappedBuffer(bufferResult);
         assertEquals("extracted sharding key should be default for empty buffer",
                 MessageShardingKeyUtil.DEFAULT_SHARDING_KEY, extractedKey);
     }
