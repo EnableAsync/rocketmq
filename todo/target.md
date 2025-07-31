@@ -306,3 +306,5 @@ Set<String/* attemptId */> attemptId = new ConcurrentHashMap.newKeySet();
 当前的 org.apache.rocketmq.broker.offset.order.ShardingKeyLevelConsumerManager.update 的实现有问题，
 他应该将传入的 getMessageResult 当中被阻塞的 shardingKey 的 result 给删去，然后返回其他 result 给用户并加锁。
 产生的 markdown 文件写在 todo 文件夹下，java 文件在他应该所在的位置
+
+现在的问题是，锁释放的时候，另一个后面的 pop 请求刚好拿了消息，导致顺序不对了

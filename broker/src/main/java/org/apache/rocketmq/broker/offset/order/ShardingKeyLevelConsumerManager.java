@@ -124,6 +124,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
                 if (lockManager.isLocked(topic, group, queueId, shardingKey, attemptId)) {
                     unavailableIndices.add(i);
                     unavailableShardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(msgQueueOffsetList.get(i));
+                    log.info("消息被锁着的消息的 offset 是: {}", msgQueueOffsetList.get(i));
                 } else {
                     // availableIndices.add(i);
                     log.info("分发出去的消息的 offset 是: {}", msgQueueOffsetList.get(i));
@@ -141,6 +142,11 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
 
             // 移除被阻塞的消息
             getMessageResult.removeIndices(unavailableIndices);
+
+            if (getMessageResult.getMessageBufferList().isEmpty()) {
+                log.info("读取消息，但是读到的都被锁着");
+                return;
+            }
 
             // 创建锁
             for (Map.Entry<String, List<Long>> entry : availableShardingKeyOffsets.entrySet()) {

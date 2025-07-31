@@ -183,8 +183,9 @@ public class PopConsumerService extends ServiceThread {
 
         long commitOffset = offset;
         if (context.isFifo()) {
-            if (!GetMessageStatus.FOUND.equals(result.getStatus())) {
+            if (!GetMessageStatus.FOUND.equals(result.getStatus()) && brokerConfig.getOrderedConsumptionLevel() == OrderedConsumptionLevel.QUEUE) {
                 // 没找到消息时，提交下一个开始偏移量
+                // 这里是因为拉取消息，发现 tag 不一致，导致位点跳过了一批，这些位点需要提交
                 commitOffset = result.getNextBeginOffset();
                 this.brokerController.getConsumerOffsetManager().commitOffset(
                     context.getClientHost(), context.getGroupId(), topicId, queueId, commitOffset);

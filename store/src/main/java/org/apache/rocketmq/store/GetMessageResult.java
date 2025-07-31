@@ -154,6 +154,9 @@ public class GetMessageResult {
             messageMapedList.remove(index);
             messageBufferList.remove(index);
         }
+        if (messageQueueOffset.isEmpty()) {
+            this.status = GetMessageStatus.NO_MESSAGE_IN_QUEUE;
+        }
     }
 
     public void release() {
