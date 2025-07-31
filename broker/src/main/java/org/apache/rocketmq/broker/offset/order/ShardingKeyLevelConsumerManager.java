@@ -121,6 +121,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
 
     /**
      * 从缓存消息构建 GetMessageResult
+     * 使用 GetMessageResult 的 addMessage 方法
      */
     private GetMessageResult buildGetMessageResultFromCache(List<ShardingKeyCache.CachedMessage> cachedMessages) {
         if (cachedMessages == null || cachedMessages.isEmpty()) {
@@ -131,56 +132,25 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             GetMessageResult result = new GetMessageResult();
             result.setStatus(GetMessageStatus.FOUND);
 
-            List<SelectMappedBufferResult> messageMapedList = new ArrayList<>();
-            List<ByteBuffer> messageBufferList = new ArrayList<>();
-            List<Long> messageQueueOffsetList = new ArrayList<>();
-
             for (ShardingKeyCache.CachedMessage cachedMessage : cachedMessages) {
                 GetMessageResult msgResult = cachedMessage.getMessageResult();
-                if (msgResult != null) {
-                    if (msgResult.getMessageMapedList() != null) {
-                        messageMapedList.addAll(msgResult.getMessageMapedList());
-                    }
-                    if (msgResult.getMessageBufferList() != null) {
-                        messageBufferList.addAll(msgResult.getMessageBufferList());
-                    }
-                    if (msgResult.getMessageQueueOffset() != null) {
-                        messageQueueOffsetList.addAll(msgResult.getMessageQueueOffset());
+                if (msgResult != null && msgResult.getMessageMapedList() != null) {
+                    // 使用 GetMessageResult 的 addMessage 方法添加消息
+                    for (int i = 0; i < msgResult.getMessageMapedList().size(); i++) {
+                        SelectMappedBufferResult mapedBuffer = msgResult.getMessageMapedList().get(i);
+                        long queueOffset = (msgResult.getMessageQueueOffset() != null && i < msgResult.getMessageQueueOffset().size())
+                            ? msgResult.getMessageQueueOffset().get(i)
+                            : cachedMessage.getMinOffset();
+
+                        result.addMessage(mapedBuffer, queueOffset);
                     }
                 }
             }
-
-            // 使用反射设置字段，因为可能没有对应的 setter 方法
-            setGetMessageResultFields(result, messageMapedList, messageBufferList, messageQueueOffsetList);
 
             return result;
         } catch (Exception e) {
             log.error("Failed to build GetMessageResult from cache", e);
             return null;
-        }
-    }
-
-    /**
-     * 使用反射设置 GetMessageResult 的字段
-     */
-    private void setGetMessageResultFields(GetMessageResult result,
-                                         List<SelectMappedBufferResult> messageMapedList,
-                                         List<ByteBuffer> messageBufferList,
-                                         List<Long> messageQueueOffsetList) {
-        try {
-            java.lang.reflect.Field messageMapedListField = GetMessageResult.class.getDeclaredField("messageMapedList");
-            messageMapedListField.setAccessible(true);
-            messageMapedListField.set(result, messageMapedList);
-
-            java.lang.reflect.Field messageBufferListField = GetMessageResult.class.getDeclaredField("messageBufferList");
-            messageBufferListField.setAccessible(true);
-            messageBufferListField.set(result, messageBufferList);
-
-            java.lang.reflect.Field messageQueueOffsetField = GetMessageResult.class.getDeclaredField("messageQueueOffset");
-            messageQueueOffsetField.setAccessible(true);
-            messageQueueOffsetField.set(result, messageQueueOffsetList);
-        } catch (Exception e) {
-            log.warn("Failed to set GetMessageResult fields using reflection", e);
         }
     }
 
@@ -196,7 +166,8 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             Map<String, List<Long>> shardingKeyOffsets = new HashMap<>();
             for (ShardingKeyCache.CachedMessage cachedMessage : cachedMessages) {
                 String shardingKey = cachedMessage.getShardingKey();
-                long offset = cachedMessage.getOffset();
+                // 修复编译错误：使用 getMinOffset() 替代不存在的 getOffset()
+                long offset = cachedMessage.getMinOffset();
                 shardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(offset);
             }
 
@@ -324,44 +295,45 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
 
     /**
      * 从完整的GetMessageResult中创建单个消息的结果
+     * 使用 GetMessageResult 的 addMessage 方法，避免反射
      */
     private GetMessageResult createSingleMessageResult(GetMessageResult originalResult, int index) {
         if (originalResult == null || index < 0 || index >= originalResult.getMessageBufferList().size()) {
             return null;
         }
 
-        GetMessageResult singleResult = new GetMessageResult();
-        singleResult.setStatus(originalResult.getStatus());
-        singleResult.setNextBeginOffset(originalResult.getNextBeginOffset());
-        singleResult.setMinOffset(originalResult.getMinOffset());
-        singleResult.setMaxOffset(originalResult.getMaxOffset());
-        singleResult.setSuggestPullingFromSlave(originalResult.isSuggestPullingFromSlave());
+        try {
+            GetMessageResult singleResult = new GetMessageResult();
+            singleResult.setStatus(originalResult.getStatus());
+            singleResult.setNextBeginOffset(originalResult.getNextBeginOffset());
+            singleResult.setMinOffset(originalResult.getMinOffset());
+            singleResult.setMaxOffset(originalResult.getMaxOffset());
+            singleResult.setSuggestPullingFromSlave(originalResult.isSuggestPullingFromSlave());
 
-        // 复制单个消息的数据
-        List<SelectMappedBufferResult> singleMessageList = new ArrayList<>();
-        List<ByteBuffer> singleBufferList = new ArrayList<>();
-        List<Long> singleOffsetList = new ArrayList<>();
+            // 使用 addMessage 方法添加单个消息，避免反射
+            if (originalResult.getMessageMapedList() != null && index < originalResult.getMessageMapedList().size()) {
+                SelectMappedBufferResult mapedBuffer = originalResult.getMessageMapedList().get(index);
+                long queueOffset = (originalResult.getMessageQueueOffset() != null && index < originalResult.getMessageQueueOffset().size())
+                    ? originalResult.getMessageQueueOffset().get(index)
+                    : -1L;
 
-        if (originalResult.getMessageMapedList() != null && index < originalResult.getMessageMapedList().size()) {
-            singleMessageList.add(originalResult.getMessageMapedList().get(index));
-        }
-        if (originalResult.getMessageBufferList() != null && index < originalResult.getMessageBufferList().size()) {
-            singleBufferList.add(originalResult.getMessageBufferList().get(index));
-        }
-        if (originalResult.getMessageQueueOffset() != null && index < originalResult.getMessageQueueOffset().size()) {
-            singleOffsetList.add(originalResult.getMessageQueueOffset().get(index));
-        }
+                if (queueOffset != -1L) {
+                    singleResult.addMessage(mapedBuffer, queueOffset);
+                } else {
+                    singleResult.addMessage(mapedBuffer);
+                }
+            }
 
-        // 使用反射设置字段
-        setGetMessageResultFields(singleResult, singleMessageList, singleBufferList, singleOffsetList);
-        return singleResult;
+            return singleResult;
+        } catch (Exception e) {
+            log.warn("Failed to create single message result", e);
+            return null;
+        }
     }
 
     /**
      * 提交消息并计算下一个消费偏移量
      * 当消费者 ACK 消息时调用
-     *
-     * 【核心改造】移除 minOffset 逻辑，实现消息激活机制
      */
     @Override
     public long commitAndNext(String topic, String group, int queueId, long queueOffset, long popTime) {

@@ -20,6 +20,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicLong;
@@ -42,7 +43,8 @@ public class ShardingKeyCache {
     private static final Logger log = LoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
 
     /**
-     * 可用消息信息
+     * 缓存的消息信息
+     * 一个 CachedMessage 代表一批相同 shardingKey 的消息，共享同一个 GetMessageResult
      */
     public static class CachedMessage {
         private final String topic;
@@ -50,36 +52,18 @@ public class ShardingKeyCache {
         private final int queueId;
         private final String shardingKey;
         private final GetMessageResult messageResult;
-        private final long offset;
+        private final List<Long> offsets;
         private final long createTime;
 
         public CachedMessage(String topic, String group, int queueId, String shardingKey,
-            GetMessageResult messageResult) {
+            GetMessageResult messageResult, List<Long> offsets) {
             this.topic = topic;
             this.group = group;
             this.queueId = queueId;
             this.shardingKey = shardingKey;
             this.messageResult = messageResult;
-            this.offset = extractOffsetFromResult(messageResult);
+            this.offsets = new ArrayList<>(offsets); // 防止外部修改
             this.createTime = System.currentTimeMillis();
-        }
-
-        public CachedMessage(String topic, String group, int queueId, String shardingKey,
-            GetMessageResult messageResult, long offset) {
-            this.topic = topic;
-            this.group = group;
-            this.queueId = queueId;
-            this.shardingKey = shardingKey;
-            this.messageResult = messageResult;
-            this.offset = offset;
-            this.createTime = System.currentTimeMillis();
-        }
-
-        private long extractOffsetFromResult(GetMessageResult result) {
-            if (result != null && result.getMessageQueueOffset() != null && !result.getMessageQueueOffset().isEmpty()) {
-                return result.getMessageQueueOffset().get(0);
-            }
-            return -1L;
         }
 
         /**
@@ -103,6 +87,13 @@ public class ShardingKeyCache {
             return this.shardingKey.equals(shardingKey);
         }
 
+        /**
+         * 获取最小 offset
+         */
+        public long getMinOffset() {
+            return offsets.isEmpty() ? -1L : Collections.min(offsets);
+        }
+
         // Getters
         public String getTopic() {
             return topic;
@@ -124,8 +115,8 @@ public class ShardingKeyCache {
             return messageResult;
         }
 
-        public long getOffset() {
-            return offset;
+        public List<Long> getOffsets() {
+            return new ArrayList<>(offsets); // 返回副本防止外部修改
         }
 
         public long getCreateTime() {
@@ -139,7 +130,7 @@ public class ShardingKeyCache {
                 ", group='" + group + '\'' +
                 ", queueId=" + queueId +
                 ", shardingKey='" + shardingKey + '\'' +
-                ", offset=" + offset +
+                ", offsets=" + offsets +
                 ", createTime=" + createTime +
                 '}';
         }
@@ -148,8 +139,8 @@ public class ShardingKeyCache {
     // 可用消息队列，按 topic@group@queueId 分组
     private final ConcurrentHashMap<String, ConcurrentLinkedQueue<CachedMessage>> availableMessagesMap;
 
-    // 不可用消息缓存：QueueKey -> ShardingKey -> 有序的消息列表
-    private final ConcurrentHashMap<String/*queueKey*/, ConcurrentHashMap<String/*shardingKey*/, ConcurrentLinkedQueue<CachedMessage>>> unavailableMessagesMap;
+    // 不可用消息缓存：QueueKey -> ShardingKey -> 消息
+    private final ConcurrentHashMap<String/*queueKey*/, ConcurrentHashMap<String/*shardingKey*/, CachedMessage>> unavailableMessagesMap;
 
     // 缓存统计信息
     private final AtomicLong totalCachedMessages;
@@ -176,11 +167,11 @@ public class ShardingKeyCache {
      * @param queueId       队列ID
      * @param shardingKey   shardingKey
      * @param messageResult 消息结果
+     * @param offsets       消息offset列表
      */
     public void addAvailableMessage(String topic, String group, int queueId, String shardingKey,
-        GetMessageResult messageResult) {
-        if (messageResult == null || messageResult.getMessageMapedList() == null ||
-            messageResult.getMessageMapedList().isEmpty()) {
+        GetMessageResult messageResult, List<Long> offsets) {
+        if (messageResult == null || offsets == null || offsets.isEmpty()) {
             return;
         }
 
@@ -197,11 +188,11 @@ public class ShardingKeyCache {
             }
         }
 
-        CachedMessage availableMessage = new CachedMessage(topic, group, queueId, shardingKey, messageResult);
+        CachedMessage availableMessage = new CachedMessage(topic, group, queueId, shardingKey, messageResult, offsets);
         queue.offer(availableMessage);
         totalCachedMessages.incrementAndGet();
 
-        log.debug("Added available message to cache: {}", availableMessage);
+        log.debug("Added available message batch to cache: {}", availableMessage);
     }
 
     /**
@@ -221,74 +212,15 @@ public class ShardingKeyCache {
         }
 
         String queueKey = MessageShardingKeyUtil.buildTopicGroupQueueIdentifier(topic, group, queueId);
-        ConcurrentHashMap<String, ConcurrentLinkedQueue<CachedMessage>> shardingKeyMap =
+        ConcurrentHashMap<String, CachedMessage> shardingKeyMap =
             unavailableMessagesMap.computeIfAbsent(queueKey, k -> new ConcurrentHashMap<>());
-        ConcurrentLinkedQueue<CachedMessage> messageQueue =
-            shardingKeyMap.computeIfAbsent(shardingKey, k -> new ConcurrentLinkedQueue<>());
 
-        // 为每个offset创建独立的消息结果
-        for (int i = 0; i < offsets.size() && i < messageResult.getMessageBufferList().size(); i++) {
-            long offset = offsets.get(i);
-            GetMessageResult singleMsgResult = createSingleMessageResult(messageResult, i);
+        // 一批相同 shardingKey 的消息创建一个 GetMessageResult
+        CachedMessage unavailableMessage = new CachedMessage(topic, group, queueId, shardingKey, messageResult, offsets);
+        shardingKeyMap.put(shardingKey, unavailableMessage);
+        totalCachedMessages.incrementAndGet();
 
-            CachedMessage unavailableMessage = new CachedMessage(topic, group, queueId, shardingKey, singleMsgResult, offset);
-            messageQueue.offer(unavailableMessage);
-            totalCachedMessages.incrementAndGet();
-
-            log.debug("Added unavailable message to cache: shardingKey={}, offset={}", shardingKey, offset);
-        }
-    }
-
-    /**
-     * 从完整的GetMessageResult中创建单个消息的结果
-     */
-    private GetMessageResult createSingleMessageResult(GetMessageResult originalResult, int index) {
-        if (originalResult == null || index < 0 || index >= originalResult.getMessageBufferList().size()) {
-            return null;
-        }
-
-        GetMessageResult singleResult = new GetMessageResult();
-        singleResult.setStatus(originalResult.getStatus());
-        singleResult.setNextBeginOffset(originalResult.getNextBeginOffset());
-        singleResult.setMinOffset(originalResult.getMinOffset());
-        singleResult.setMaxOffset(originalResult.getMaxOffset());
-        singleResult.setSuggestPullingFromSlave(originalResult.isSuggestPullingFromSlave());
-
-        // 复制单个消息的数据
-        List<SelectMappedBufferResult> singleMessageList = new ArrayList<>();
-        List<ByteBuffer> singleBufferList = new ArrayList<>();
-        List<Long> singleOffsetList = new ArrayList<>();
-
-        if (originalResult.getMessageMapedList() != null && index < originalResult.getMessageMapedList().size()) {
-            singleMessageList.add(originalResult.getMessageMapedList().get(index));
-        }
-        if (originalResult.getMessageBufferList() != null && index < originalResult.getMessageBufferList().size()) {
-            singleBufferList.add(originalResult.getMessageBufferList().get(index));
-        }
-        if (originalResult.getMessageQueueOffset() != null && index < originalResult.getMessageQueueOffset().size()) {
-            singleOffsetList.add(originalResult.getMessageQueueOffset().get(index));
-        }
-
-        // 直接设置字段，因为 GetMessageResult 可能没有对应的 setter 方法
-        try {
-            java.lang.reflect.Field messageMapedListField = GetMessageResult.class.getDeclaredField("messageMapedList");
-            messageMapedListField.setAccessible(true);
-            messageMapedListField.set(singleResult, singleMessageList);
-
-            java.lang.reflect.Field messageBufferListField = GetMessageResult.class.getDeclaredField("messageBufferList");
-            messageBufferListField.setAccessible(true);
-            messageBufferListField.set(singleResult, singleBufferList);
-
-            java.lang.reflect.Field messageQueueOffsetField = GetMessageResult.class.getDeclaredField("messageQueueOffset");
-            messageQueueOffsetField.setAccessible(true);
-            messageQueueOffsetField.set(singleResult, singleOffsetList);
-        } catch (Exception e) {
-            log.warn("Failed to set GetMessageResult fields using reflection", e);
-            // 如果反射失败，返回 null 或使用其他策略
-            return null;
-        }
-
-        return singleResult;
+        log.debug("Added unavailable message batch to cache: shardingKey={}, offsets={}", shardingKey, offsets);
     }
 
     /**
@@ -303,25 +235,22 @@ public class ShardingKeyCache {
      */
     public boolean activateMessages(String topic, String group, int queueId, String shardingKey) {
         String queueKey = MessageShardingKeyUtil.buildTopicGroupQueueIdentifier(topic, group, queueId);
-        ConcurrentHashMap<String, ConcurrentLinkedQueue<CachedMessage>> shardingKeyMap = unavailableMessagesMap.get(queueKey);
+        ConcurrentHashMap<String, CachedMessage> shardingKeyMap = unavailableMessagesMap.get(queueKey);
         if (shardingKeyMap == null) {
             return false;
         }
 
-        ConcurrentLinkedQueue<CachedMessage> messageQueue = shardingKeyMap.remove(shardingKey);
-        if (messageQueue == null || messageQueue.isEmpty()) {
+        CachedMessage cachedMessage = shardingKeyMap.remove(shardingKey);
+        if (cachedMessage == null) {
             return false;
         }
 
-        // 将消息按offset排序后加入可用队列
-        List<CachedMessage> sortedMessages = new ArrayList<>(messageQueue);
-        sortedMessages.sort((m1, m2) -> Long.compare(m1.getOffset(), m2.getOffset()));
-
+        // 将整个消息批次移动到可用队列
         ConcurrentLinkedQueue<CachedMessage> availableQueue = availableMessagesMap.computeIfAbsent(queueKey, k -> new ConcurrentLinkedQueue<>());
-        availableQueue.addAll(sortedMessages);
+        availableQueue.offer(cachedMessage);
 
-        log.info("Activated {} messages for shardingKey: {} in topic={}, group={}, queueId={}",
-            sortedMessages.size(), shardingKey, topic, group, queueId);
+        log.info("Activated message batch for shardingKey: {} with {} offsets in topic={}, group={}, queueId={}",
+            shardingKey, cachedMessage.getOffsets().size(), topic, group, queueId);
         return true;
     }
 
@@ -364,7 +293,7 @@ public class ShardingKeyCache {
             totalMisses.incrementAndGet();
         }
 
-        log.debug("Retrieved {} available messages from cache for topic: {}, group: {}, queueId: {}",
+        log.debug("Retrieved {} available message batches from cache for topic: {}, group: {}, queueId: {}",
             result.size(), topic, group, queueId);
 
         return result;
@@ -422,7 +351,7 @@ public class ShardingKeyCache {
             totalMisses.incrementAndGet();
         }
 
-        log.debug("Retrieved {} available messages for shardingKey: {} from cache for topic: {}, group: {}, queueId: {}",
+        log.debug("Retrieved {} available message batches for shardingKey: {} from cache for topic: {}, group: {}, queueId: {}",
             result.size(), shardingKey, topic, group, queueId);
 
         return result;
@@ -449,16 +378,12 @@ public class ShardingKeyCache {
      */
     public int getUnavailableQueueCacheSize(String topic, String group, int queueId) {
         String queueKey = MessageShardingKeyUtil.buildTopicGroupQueueIdentifier(topic, group, queueId);
-        ConcurrentHashMap<String, ConcurrentLinkedQueue<CachedMessage>> shardingKeyMap = unavailableMessagesMap.get(queueKey);
+        ConcurrentHashMap<String, CachedMessage> shardingKeyMap = unavailableMessagesMap.get(queueKey);
         if (shardingKeyMap == null) {
             return 0;
         }
 
-        int totalSize = 0;
-        for (ConcurrentLinkedQueue<CachedMessage> queue : shardingKeyMap.values()) {
-            totalSize += queue.size();
-        }
-        return totalSize;
+        return shardingKeyMap.size();
     }
 
     /**
@@ -476,16 +401,14 @@ public class ShardingKeyCache {
         }
 
         // 清除不可用缓存
-        ConcurrentHashMap<String, ConcurrentLinkedQueue<CachedMessage>> unavailableMap = unavailableMessagesMap.remove(queueKey);
+        ConcurrentHashMap<String, CachedMessage> unavailableMap = unavailableMessagesMap.remove(queueKey);
         if (unavailableMap != null) {
-            for (ConcurrentLinkedQueue<CachedMessage> queue : unavailableMap.values()) {
-                removedCount += queue.size();
-                totalCachedMessages.addAndGet(-queue.size());
-            }
+            removedCount += unavailableMap.size();
+            totalCachedMessages.addAndGet(-unavailableMap.size());
         }
 
         if (removedCount > 0) {
-            log.info("Cleared {} cached messages for topic: {}, group: {}, queueId: {}",
+            log.info("Cleared {} cached message batches for topic: {}, group: {}, queueId: {}",
                 removedCount, topic, group, queueId);
         }
     }
@@ -526,36 +449,24 @@ public class ShardingKeyCache {
         }
 
         // 清理不可用缓存中的过期消息
-        for (ConcurrentHashMap<String, ConcurrentLinkedQueue<CachedMessage>> shardingKeyMap : unavailableMessagesMap.values()) {
-            for (ConcurrentLinkedQueue<CachedMessage> queue : shardingKeyMap.values()) {
-                if (queue.isEmpty()) {
-                    continue;
+        for (ConcurrentHashMap<String, CachedMessage> shardingKeyMap : unavailableMessagesMap.values()) {
+            List<String> expiredKeys = new ArrayList<>();
+
+            for (Map.Entry<String, CachedMessage> entry : shardingKeyMap.entrySet()) {
+                if (entry.getValue().isExpired(MAX_CACHE_TIME)) {
+                    expiredKeys.add(entry.getKey());
+                    expiredCount++;
                 }
+            }
 
-                List<CachedMessage> toRequeue = new ArrayList<>();
-
-                while (!queue.isEmpty()) {
-                    CachedMessage message = queue.poll();
-                    if (message == null) {
-                        break;
-                    }
-
-                    if (message.isExpired(MAX_CACHE_TIME)) {
-                        totalCachedMessages.decrementAndGet();
-                        expiredCount++;
-                    } else {
-                        toRequeue.add(message);
-                    }
-                }
-
-                for (CachedMessage message : toRequeue) {
-                    queue.offer(message);
-                }
+            for (String key : expiredKeys) {
+                shardingKeyMap.remove(key);
+                totalCachedMessages.decrementAndGet();
             }
         }
 
         if (expiredCount > 0) {
-            log.info("Cleaned up {} expired cached messages", expiredCount);
+            log.info("Cleaned up {} expired cached message batches", expiredCount);
         }
     }
 
