@@ -239,11 +239,13 @@ public class ShardingKeyCache {
         String queueKey = MessageShardingKeyUtil.buildTopicGroupQueueIdentifier(topic, group, queueId);
         ConcurrentHashMap<String, CachedMessage> shardingKeyMap = unavailableMessagesMap.get(queueKey);
         if (shardingKeyMap == null) {
+            log.info("未找到 queue 级别不可用消息缓存: topic={}, group={}, queueId={}", topic, group, queueId);
             return false;
         }
 
         CachedMessage cachedMessage = shardingKeyMap.remove(shardingKey);
         if (cachedMessage == null) {
+            log.info("未找到 shardingKey 级别不可用消息缓存: topic={}, group={}, queueId={}, shardingKey={}", topic, group, queueId, shardingKey);
             return false;
         }
 

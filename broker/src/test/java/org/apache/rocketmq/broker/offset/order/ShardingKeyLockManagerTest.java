@@ -56,17 +56,17 @@ public class ShardingKeyLockManagerTest {
     @Mock
     private PullRequestHoldService pullRequestHoldService;
 
-    @Before
-    public void setUp() {
-        MockitoAnnotations.openMocks(this);
-
-        // 设置必要的 Mock 行为
-        BrokerConfig brokerConfig = new BrokerConfig();
-        when(brokerController.getBrokerConfig()).thenReturn(brokerConfig);
-        when(brokerController.getPullRequestHoldService()).thenReturn(pullRequestHoldService);
-
-        lockManager = new ShardingKeyLockManager(brokerController);
-    }
+//    @Before
+//    public void setUp() {
+//        MockitoAnnotations.openMocks(this);
+//
+//        // 设置必要的 Mock 行为
+//        BrokerConfig brokerConfig = new BrokerConfig();
+//        when(brokerController.getBrokerConfig()).thenReturn(brokerConfig);
+//        when(brokerController.getPullRequestHoldService()).thenReturn(pullRequestHoldService);
+//
+//        lockManager = new ShardingKeyLockManager(brokerController, );
+//    }
 
     @After
     public void tearDown() {

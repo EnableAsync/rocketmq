@@ -163,7 +163,7 @@ public class ShardingKeyLockManager {
         log.info("增加 shardingKey 的锁: " + shardingKeyHash);
 
         // 添加offset到锁中
-        for (Long offset : offsets) {
+        for (long offset : offsets) {
             lock.addOffset(offset);
 
             // 更新 offset 到 sharding key 的映射
