@@ -20,16 +20,16 @@ public interface OrderedConsumptionManager {
      * 更新消息列表的接收状态
      * 当消费者POP消息时被 handleGetMessageResult 调用，用于记录消息状态和构建消费信息
      *
-     * @param attemptId 区分不同的 pop 请求
-     * @param isRetry 是否为重试主题
-     * @param topic 主题名称
-     * @param group 消费者组名称
-     * @param queueId 队列ID
-     * @param popTime 弹出消息的时间
-     * @param invisibleTime 消息不可见时间
+     * @param attemptId          区分不同的 pop 请求
+     * @param isRetry            是否为重试主题
+     * @param topic              主题名称
+     * @param group              消费者组名称
+     * @param queueId            队列ID
+     * @param popTime            弹出消息的时间
+     * @param invisibleTime      消息不可见时间
      * @param msgQueueOffsetList 消息的队列偏移量列表
-     * @param orderInfoBuilder 用于构建顺序信息的字符串构建器
-     * @param getMessageResult 返回新的 result
+     * @param orderInfoBuilder   用于构建顺序信息的字符串构建器
+     * @param getMessageResult   返回新的 result
      */
     void update(String attemptId, boolean isRetry, String topic, String group, int queueId,
         long popTime, long invisibleTime, List<Long> msgQueueOffsetList,
@@ -40,10 +40,10 @@ public interface OrderedConsumptionManager {
      * 用于确保顺序消息的顺序消费
      * 当消费者 POP 消息时调用
      *
-     * @param attemptId 尝试ID
-     * @param topic 主题名称
-     * @param group 消费者组名称
-     * @param queueId 队列ID
+     * @param attemptId     尝试ID
+     * @param topic         主题名称
+     * @param group         消费者组名称
+     * @param queueId       队列ID
      * @param invisibleTime 不可见时间
      * @return true表示需要阻塞，false表示可以继续
      */
@@ -53,11 +53,11 @@ public interface OrderedConsumptionManager {
      * 提交消息并计算下一个消费偏移量
      * 当消费者 ACK 消息时调用
      *
-     * @param topic 主题名称
-     * @param group 消费者组名称
-     * @param queueId 队列ID
+     * @param topic       主题名称
+     * @param group       消费者组名称
+     * @param queueId     队列ID
      * @param queueOffset 消息的队列偏移量
-     * @param popTime 弹出时间，用于验证
+     * @param popTime     弹出时间，用于验证
      * @return -1:非法, -2:无需提交, >=0:需要提交的偏移量(表明小于这个偏移量的消息已经被消费)
      */
     long commitAndNext(String topic, String group, int queueId, long queueOffset, long popTime);
@@ -66,11 +66,11 @@ public interface OrderedConsumptionManager {
      * 更新消息的下次可见时间
      * 用于消息的延时重新消费
      *
-     * @param topic 主题名称
-     * @param group 消费者组名称
-     * @param queueId 队列ID
-     * @param queueOffset 消息偏移量
-     * @param popTime 弹出时间，用于验证
+     * @param topic           主题名称
+     * @param group           消费者组名称
+     * @param queueId         队列ID
+     * @param queueOffset     消息偏移量
+     * @param popTime         弹出时间，用于验证
      * @param nextVisibleTime 下次可见时间
      */
     void updateNextVisibleTime(String topic, String group, int queueId, long queueOffset,
@@ -80,8 +80,8 @@ public interface OrderedConsumptionManager {
      * 清除指定队列的阻塞状态
      * 通常在消费者重新平衡或队列重新分配时调用
      *
-     * @param topic 主题名称
-     * @param group 消费者组名称
+     * @param topic   主题名称
+     * @param group   消费者组名称
      * @param queueId 队列ID
      */
     void clearBlock(String topic, String group, int queueId);
@@ -117,4 +117,11 @@ public interface OrderedConsumptionManager {
      * 从存储加载数据
      */
     boolean load();
+
+    /**
+     * 获取可用消息结果
+     * 用于从缓存中获取消息
+     */
+    GetMessageResult getAvailableMessageResult(String attemptId, long popTime, long invisibleTime, String groupId,
+        String topicId, int queueId, int batchSize);
 }

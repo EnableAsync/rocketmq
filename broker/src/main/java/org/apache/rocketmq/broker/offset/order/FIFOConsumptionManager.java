@@ -72,4 +72,7 @@ public class FIFOConsumptionManager {
         this.orderedConsumptionManager.shutdown();
     }
 
+    public GetMessageResult getAvailableMessageResult(String attemptId, long popTime, long invisibleTime, String groupId, String topicId, int queueId, int batchSize) {
+        return this.orderedConsumptionManager.getAvailableMessageResult(attemptId, popTime, invisibleTime, groupId, topicId, queueId, batchSize);
+    }
 }

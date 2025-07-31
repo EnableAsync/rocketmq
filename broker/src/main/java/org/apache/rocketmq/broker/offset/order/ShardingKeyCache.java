@@ -136,7 +136,7 @@ public class ShardingKeyCache {
         }
     }
 
-    // 可用消息队列，按 topic@group@queueId 分组
+    // 可用消息队列，按 topic@group@queueId 分组，不用区分 shardingKey 了
     private final ConcurrentHashMap<String, ConcurrentLinkedQueue<CachedMessage>> availableMessagesMap;
 
     // 不可用消息缓存：QueueKey -> ShardingKey -> 消息
@@ -203,7 +203,7 @@ public class ShardingKeyCache {
      * @param queueId     队列ID
      * @param shardingKey shardingKey
      * @param messageResult 消息结果
-     * @param offsets     消息offset列表
+     * @param offsets     消息 offsets 列表
      */
     public void addUnavailableMessage(String topic, String group, int queueId, String shardingKey,
         GetMessageResult messageResult, List<Long> offsets) {

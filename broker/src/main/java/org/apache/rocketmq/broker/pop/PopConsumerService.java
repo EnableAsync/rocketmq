@@ -186,6 +186,7 @@ public class PopConsumerService extends ServiceThread {
             if (!GetMessageStatus.FOUND.equals(result.getStatus()) && brokerConfig.getOrderedConsumptionLevel() == OrderedConsumptionLevel.QUEUE) {
                 // 没找到消息时，提交下一个开始偏移量
                 // 这里是因为拉取消息，发现 tag 不一致，导致位点跳过了一批，这些位点需要提交
+                // TODO: shardingKey 级别也需要考虑
                 commitOffset = result.getNextBeginOffset();
                 this.brokerController.getConsumerOffsetManager().commitOffset(
                     context.getClientHost(), context.getGroupId(), topicId, queueId, commitOffset);
@@ -293,6 +294,11 @@ public class PopConsumerService extends ServiceThread {
             context.getAttemptId(), topicId, groupId, queueId, context.getInvisibleTime());
     }
 
+    public GetMessageResult getAvailableMessageResult(String attemptId, long popTime, long invisibleTime,
+        String groupId, String topicId, int queueId, int batchSize) {
+        return brokerController.getConsumerOrderInfoManager().getAvailableMessageResult(attemptId, popTime, invisibleTime, topicId, groupId, queueId, batchSize);
+    }
+
     protected CompletableFuture<PopConsumerContext> getMessageAsync(CompletableFuture<PopConsumerContext> future,
         String clientHost, String groupId, String topicId, int queueId, int batchSize, MessageFilter filter,
         PopConsumerRecord.RetryType retryType) {
@@ -304,17 +310,26 @@ public class PopConsumerService extends ServiceThread {
                 return CompletableFuture.completedFuture(result);
             }
 
-            // Current requests would calculate the total number of messages
-            // waiting to be filtered for new message arrival notifications in
-            // the long-polling service, need disregarding the backlog in order
-            // consumption scenario. If rest message num including the blocked
-            // queue accumulation would lead to frequent unnecessary wake-ups
-            // of long-polling requests, resulting unnecessary CPU usage.
-            // When client ack message, long-polling request would be notifications
-            // by AckMessageProcessor.ackOrderly() and message will not be delayed.
-            if (result.isFifo() && isFifoBlocked(result, groupId, topicId, queueId)) {
-                // should not add accumulation(max offset - consumer offset) here
-                return CompletableFuture.completedFuture(result);
+            if (result.isFifo()) {
+                // Current requests would calculate the total number of messages
+                // waiting to be filtered for new message arrival notifications in
+                // the long-polling service, need disregarding the backlog in order
+                // consumption scenario. If rest message num including the blocked
+                // queue accumulation would lead to frequent unnecessary wake-ups
+                // of long-polling requests, resulting unnecessary CPU usage.
+                // When client ack message, long-polling request would be notifications
+                // by AckMessageProcessor.ackOrderly() and message will not be delayed.
+                if (isFifoBlocked(result, groupId, topicId, queueId)) {
+                    // should not add accumulation(max offset - consumer offset) here
+                    return CompletableFuture.completedFuture(result);
+                }
+                GetMessageResult cacheResult = getAvailableMessageResult(result.getAttemptId(), result.getPopTime(), result.getInvisibleTime(), groupId, topicId, queueId, batchSize);
+                if (cacheResult != null) {
+                    // 不走 store 读取消息，直接从 cache 中取消息
+                    return CompletableFuture.completedFuture(result)
+                        .thenApply(r -> handleGetMessageResult( // 更新位点
+                            result, cacheResult, topicId, queueId, retryType, cacheResult.getMaxOffset()));
+                }
             }
 
             int remain = batchSize - result.getMessageCount();
