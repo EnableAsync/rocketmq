@@ -325,10 +325,14 @@ public class PopConsumerService extends ServiceThread {
                 }
                 GetMessageResult cacheResult = getAvailableMessageResult(result.getAttemptId(), result.getPopTime(), result.getInvisibleTime(), groupId, topicId, queueId, batchSize);
                 if (cacheResult != null) {
+                    log.info("没有从 store 取消息，直接从 cache 中取消息, groupId={}, topicId={}, queueId={}, batchSize={}, offset={}",
+                        groupId, topicId, queueId, batchSize, cacheResult.getMaxOffset());
                     // 不走 store 读取消息，直接从 cache 中取消息
                     return CompletableFuture.completedFuture(result)
                         .thenApply(r -> handleGetMessageResult( // 更新位点
                             result, cacheResult, topicId, queueId, retryType, cacheResult.getMaxOffset()));
+                } else {
+
                 }
             }
 

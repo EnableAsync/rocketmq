@@ -71,14 +71,17 @@ public class ShardingKeyLockManager {
 
     private final BrokerController brokerController;
 
+    private final ShardingKeyCache cache;
+
     /**
      * 过期消息缓存，存储可直接消费的过期消息
      * topic@group@queueId -> shardingKeyHash list
      */
     private final ConcurrentHashMap<String, Set<String>> expiredShardingKeyCache;
 
-    public ShardingKeyLockManager(BrokerController brokerController) {
+    public ShardingKeyLockManager(BrokerController brokerController, ShardingKeyCache cache) {
         this.brokerController = brokerController;
+        this.cache = cache;
         this.shardingKeyLockMap = new ConcurrentHashMap<>(128);
         this.offsetToShardingKeyMap = new ConcurrentHashMap<>(128);
         this.attemptIdSet = ConcurrentHashMap.newKeySet();
@@ -203,6 +206,7 @@ public class ShardingKeyLockManager {
 
     /**
      * 释放指定 offset 对应的 sharding key 锁
+     *
      * @return true 如果这个 offset 是该 shardingKey 下的最后一个 offset，锁被彻底释放
      */
     public boolean releaseLock(String topic, String group, int queueId, long offset, long popTime) {
@@ -247,18 +251,20 @@ public class ShardingKeyLockManager {
 
             // 如果锁为空，则完全释放该sharding key锁
             if (lock.isEmpty()) {
-                log.info("释放了 shardingKey 的锁: {}", shardingKeyHash);
-                shardingKeyMap.remove(shardingKeyHash);
-
                 // 取消定时任务
                 cancelExpireTask(topic, group, queueId, shardingKeyHash);
 
-                log.debug("Released sharding key lock: {} for topic: {}, group: {}, queueId: {}",
-                    shardingKeyHash, topic, group, queueId);
+                boolean activated = cache.activateMessages(topic, group, queueId, shardingKeyHash);
+                if (activated) {
+                    // 激活成功后，唤醒长轮询
+                    notifyLongPolling(topic, group, queueId);
+                    log.info("消息ACK成功，激活ShardingKey缓存消息: shardingKey={}, offset={}", shardingKeyHash, offset);
+                } else {
+                    log.warn("消息ACK成功，激活ShardingKey缓存消息失败: shardingKey={}, offset={}", shardingKeyHash, offset);
+                }
 
-                // 唤醒长轮询
-                log.info("唤醒了长轮询");
-                notifyLongPolling(topic, group, queueId);
+                log.info("释放了 shardingKey 的锁: {}", shardingKeyHash);
+                shardingKeyMap.remove(shardingKeyHash);
 
                 return true; // 返回 true 表示锁已完全释放
             }
@@ -567,5 +573,53 @@ public class ShardingKeyLockManager {
             String lockKey = buildLockKey(topic, group, queueId, shardingKeyHash);
             timeoutMap.remove(lockKey, timeout);
         }
+    }
+
+    /**
+     * 获取指定队列中所有飞行中消息的最小 offset
+     * 用于 commitAndNext 返回正确的消费位点
+     */
+    public long getMinInFlightOffset(String topic, String group, int queueId) {
+        String topicGroupKey = MessageShardingKeyUtil.buildTopicGroupIdentifier(topic, group);
+
+        // 从 offset 映射中获取所有飞行中的 offset
+        ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> groupOffsetMaps = offsetToShardingKeyMap.get(topicGroupKey);
+        if (groupOffsetMaps == null) {
+            return -1L; // 没有飞行中的消息
+        }
+
+        ConcurrentHashMap<Long, String> queueOffsetMap = groupOffsetMaps.get(queueId);
+        if (queueOffsetMap == null || queueOffsetMap.isEmpty()) {
+            return -1L; // 没有飞行中的消息
+        }
+
+        // 找到最小的 offset
+        long minOffset = Long.MAX_VALUE;
+        for (Long offset : queueOffsetMap.keySet()) {
+            if (offset < minOffset) {
+                minOffset = offset;
+            }
+        }
+
+        return minOffset == Long.MAX_VALUE ? -1L : minOffset;
+    }
+
+    /**
+     * 获取指定队列中所有飞行中消息的数量
+     */
+    public int getInFlightMessageCount(String topic, String group, int queueId) {
+        String topicGroupKey = MessageShardingKeyUtil.buildTopicGroupIdentifier(topic, group);
+
+        ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> groupOffsetMaps = offsetToShardingKeyMap.get(topicGroupKey);
+        if (groupOffsetMaps == null) {
+            return 0;
+        }
+
+        ConcurrentHashMap<Long, String> queueOffsetMap = groupOffsetMaps.get(queueId);
+        if (queueOffsetMap == null) {
+            return 0;
+        }
+
+        return queueOffsetMap.size();
     }
 }

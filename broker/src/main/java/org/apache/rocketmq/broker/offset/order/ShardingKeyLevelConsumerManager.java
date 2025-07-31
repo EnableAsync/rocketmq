@@ -60,8 +60,8 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
 
     public ShardingKeyLevelConsumerManager(BrokerController brokerController) {
         this.brokerController = brokerController;
-        this.lockManager = new ShardingKeyLockManager(brokerController);
         this.cache = new ShardingKeyCache();
+        this.lockManager = new ShardingKeyLockManager(brokerController, this.cache);
     }
 
     /**
@@ -240,8 +240,6 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
                     GetMessageResult extractedResult = extractMessagesForShardingKey(getMessageResult, indices, shardingKey, offsets);
                     if (extractedResult != null) {
                         cache.addUnavailableMessage(topic, group, queueId, shardingKey, extractedResult, offsets);
-                        log.info("添加不可用消息到缓存: topic={}, group={}, queueId={}, shardingKey={}, 消息数量={}",
-                            topic, group, queueId, shardingKey, offsets.size());
                     }
                 }
             }
@@ -320,29 +318,19 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             // 根据 offset 释放对应的 sharding key 锁
             boolean fullyReleased = lockManager.releaseLock(topic, group, queueId, queueOffset, popTime);
 
-            if (fullyReleased) {
-                // 锁完全释放后，激活缓存中对应 shardingKey 的消息
-                String shardingKey = lockManager.findShardingKeyByOffset(topic, group, queueId, queueOffset);
-                if (shardingKey != null) {
-                    boolean activated = cache.activateMessages(topic, group, queueId, shardingKey);
-                    if (activated) {
-                        // 激活成功后，唤醒长轮询
-                        notifyLongPolling(topic, group, queueId);
-                        log.info("Activated messages for shardingKey: {} after ACK offset: {}", shardingKey, queueOffset);
-                    }
-                }
-
-                log.info("Successfully released sharding key lock for offset: {} in topic: {}, group: {}, queueId: {}",
-                    queueOffset, topic, group, queueId);
-
-                return 0; // 返回 0 表示成功，在 ShardingKey 模式下不需要连续的消费位点
+            // 返回当前未被 ack 的最小 offset
+            long minInFlightOffset = lockManager.getMinInFlightOffset(topic, group, queueId);
+            if (minInFlightOffset == -1L) {
+                // 没有飞行中的消息，返回当前 offset + 1 作为下一个消费位点
+                log.info("所有消息已确认，返回下一个消费位点: {}", queueOffset + 1);
+                return queueOffset + 1;
             } else {
-                log.debug("Partially released lock for offset: {} in topic: {}, group: {}, queueId: {}",
-                    queueOffset, topic, group, queueId);
-                return -2; // 返回 -2 表示无需提交（锁内还有其他消息）
+                // 返回当前未被 ack 的最小 offset
+                log.debug("返回当前未被ACK的最小offset: {}", minInFlightOffset);
+                return minInFlightOffset;
             }
         } catch (Exception e) {
-            log.error("Failed to commit and next for offset: {} in topic: {}, group: {}, queueId: {}",
+            log.error("消息确认失败: offset={}, topic={}, group={}, queueId={}",
                 queueOffset, topic, group, queueId, e);
             return -1; // 返回 -1 表示非法操作
         }
