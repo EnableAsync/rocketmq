@@ -108,6 +108,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
         try {
             List<ShardingKeyCache.CachedMessage> cachedMessages = cache.getAvailableMessages(topic, group, queueId, maxCount);
             if (cachedMessages.isEmpty()) {
+                log.debug("缓存中无可用消息: topic={}, group={}, queueId={}", topic, group, queueId);
                 return null;
             }
 
@@ -115,12 +116,13 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             GetMessageResult result = buildGetMessageResultAndCreateLocks(attemptId, popTime, invisibleTime,
                 topic, group, queueId, cachedMessages);
             if (result != null) {
-                log.info("Retrieved {} messages from cache for topic={}, group={}, queueId={}",
-                    cachedMessages.size(), topic, group, queueId);
+                log.info("从缓存中成功获取消息: topic={}, group={}, queueId={}, 消息批次数量={}, attemptId={}",
+                    topic, group, queueId, cachedMessages.size(), attemptId);
             }
             return result;
         } catch (Exception e) {
-            log.error("Failed to pop message from cache for topic: {}, group: {}, queueId: {}", topic, group, queueId, e);
+            log.error("从缓存中获取消息失败: topic={}, group={}, queueId={}, attemptId={}",
+                topic, group, queueId, attemptId, e);
             return null;
         }
     }
@@ -135,54 +137,14 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             return null;
         }
 
-        try {
-            GetMessageResult result = new GetMessageResult();
-            result.setStatus(GetMessageStatus.FOUND);
-            long minOffset = Long.MAX_VALUE;
-            long maxOffset = 0;
+        // 直接使用第一个 CachedMessage 的 GetMessageResult
+        // 因为每个 CachedMessage 代表一批完整的消息，可以直接返回
+        GetMessageResult result = cachedMessages.get(0).getMessageResult();
 
-            // 用于创建锁的数据结构
-            Map<String, List<Long>> shardingKeyOffsets = new HashMap<>();
+        log.debug("构建缓存消息结果并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}",
+            topic, group, queueId, cachedMessages.size());
 
-            // 一次遍历完成构建GetMessageResult和收集锁信息
-            for (ShardingKeyCache.CachedMessage cachedMessage : cachedMessages) {
-                GetMessageResult msgResult = cachedMessage.getMessageResult();
-                String shardingKey = cachedMessage.getShardingKey();
-
-                if (msgResult != null && msgResult.getMessageMapedList() != null) {
-                    // 构建GetMessageResult
-                    for (int i = 0; i < msgResult.getMessageMapedList().size(); i++) {
-                        SelectMappedBufferResult mapedBuffer = msgResult.getMessageMapedList().get(i);
-                        long queueOffset = (msgResult.getMessageQueueOffset() != null && i < msgResult.getMessageQueueOffset().size())
-                            ? msgResult.getMessageQueueOffset().get(i)
-                            : cachedMessage.getMinOffset();
-
-                        minOffset = Math.min(minOffset, queueOffset);
-                        maxOffset = Math.max(maxOffset, queueOffset);
-                        result.addMessage(mapedBuffer, queueOffset);
-
-                        // 同时收集锁信息
-                        shardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(queueOffset);
-                    }
-                }
-            }
-
-            result.setMinOffset(minOffset);
-            result.setMaxOffset(maxOffset);
-            result.setNextBeginOffset(maxOffset + 1);
-
-            // 创建锁
-            for (Map.Entry<String, List<Long>> entry : shardingKeyOffsets.entrySet()) {
-                String shardingKey = entry.getKey();
-                List<Long> offsets = entry.getValue();
-                lockManager.createOrUpdateLock(topic, group, queueId, shardingKey, popTime, invisibleTime, attemptId, offsets);
-            }
-
-            return result;
-        } catch (Exception e) {
-            log.error("Failed to build GetMessageResult and create locks from cache", e);
-            return null;
-        }
+        return result;
     }
 
     /**
@@ -267,28 +229,31 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
                 String shardingKey = entry.getKey();
                 List<Integer> indices = entry.getValue();
 
-                // 为每个被阻塞的 shardingKey 创建对应的 GetMessageResult
-                GetMessageResult unavailableResult = extractMessagesForShardingKey(getMessageResult, indices);
-
                 List<Long> offsets = new ArrayList<>();
                 for (Integer index : indices) {
-                    offsets.add(getMessageResult.getMessageQueueOffset().get(index));
+                    if (index < getMessageResult.getMessageQueueOffset().size()) {
+                        offsets.add(getMessageResult.getMessageQueueOffset().get(index));
+                    }
                 }
 
-                if (unavailableResult != null) {
-                    // 增加到 cache
-                    cache.addUnavailableMessage(topic, group, queueId, shardingKey, unavailableResult, offsets);
+                if (!offsets.isEmpty()) {
+                    GetMessageResult extractedResult = extractMessagesForShardingKey(getMessageResult, indices, shardingKey, offsets);
+                    if (extractedResult != null) {
+                        cache.addUnavailableMessage(topic, group, queueId, shardingKey, extractedResult, offsets);
+                        log.info("添加不可用消息到缓存: topic={}, group={}, queueId={}, shardingKey={}, 消息数量={}",
+                            topic, group, queueId, shardingKey, offsets.size());
+                    }
                 }
             }
         } catch (Exception e) {
-            log.error("Failed to store unavailable messages", e);
+            log.error("添加不可用消息到缓存失败: topic={}, group={}, queueId={}", topic, group, queueId, e);
         }
     }
 
     /**
      * 从完整的 GetMessageResult 中提取特定 shardingKey 的消息
      */
-    private GetMessageResult extractMessagesForShardingKey(GetMessageResult originalResult, List<Integer> indices) {
+    private GetMessageResult extractMessagesForShardingKey(GetMessageResult originalResult, List<Integer> indices, String shardingKey, List<Long> offsets) {
         if (originalResult == null) {
             return null;
         }

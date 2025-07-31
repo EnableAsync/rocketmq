@@ -184,7 +184,7 @@ public class ShardingKeyCache {
             CachedMessage removed = queue.poll();
             if (removed != null) {
                 totalCachedMessages.decrementAndGet();
-                log.warn("Cache queue is full, removed oldest message: {}", removed);
+                log.warn("缓存队列已满，移除最旧消息: {}", removed);
             }
         }
 
@@ -192,7 +192,8 @@ public class ShardingKeyCache {
         queue.offer(availableMessage);
         totalCachedMessages.incrementAndGet();
 
-        log.debug("Added available message batch to cache: {}", availableMessage);
+        log.info("添加可用消息批次到缓存: topic={}, group={}, queueId={}, shardingKey={}, 消息数量={}",
+            topic, group, queueId, shardingKey, offsets.size());
     }
 
     /**
@@ -203,7 +204,7 @@ public class ShardingKeyCache {
      * @param queueId     队列ID
      * @param shardingKey shardingKey
      * @param messageResult 消息结果
-     * @param offsets     消息 offsets 列表
+     * @param offsets     消息offset列表
      */
     public void addUnavailableMessage(String topic, String group, int queueId, String shardingKey,
         GetMessageResult messageResult, List<Long> offsets) {
@@ -220,7 +221,8 @@ public class ShardingKeyCache {
         shardingKeyMap.put(shardingKey, unavailableMessage);
         totalCachedMessages.incrementAndGet();
 
-        log.debug("Added unavailable message batch to cache: shardingKey={}, offsets={}", shardingKey, offsets);
+        log.info("添加不可用消息批次到缓存: topic={}, group={}, queueId={}, shardingKey={}, 消息数量={}",
+            topic, group, queueId, shardingKey, offsets.size());
     }
 
     /**
@@ -249,8 +251,8 @@ public class ShardingKeyCache {
         ConcurrentLinkedQueue<CachedMessage> availableQueue = availableMessagesMap.computeIfAbsent(queueKey, k -> new ConcurrentLinkedQueue<>());
         availableQueue.offer(cachedMessage);
 
-        log.info("Activated message batch for shardingKey: {} with {} offsets in topic={}, group={}, queueId={}",
-            shardingKey, cachedMessage.getOffsets().size(), topic, group, queueId);
+        log.info("激活消息批次成功: topic={}, group={}, queueId={}, shardingKey={}, 激活消息数量={}",
+            topic, group, queueId, shardingKey, cachedMessage.getOffsets().size());
         return true;
     }
 
@@ -278,7 +280,7 @@ public class ShardingKeyCache {
             // 检查消息是否过期
             if (message.isExpired(MAX_CACHE_TIME)) {
                 totalCachedMessages.decrementAndGet();
-                log.warn("Removed expired cached message: {}", message);
+                log.warn("移除过期缓存消息: {}", message);
                 continue;
             }
 
@@ -289,12 +291,12 @@ public class ShardingKeyCache {
 
         if (!result.isEmpty()) {
             totalHits.incrementAndGet();
+            log.info("从缓存中获取可用消息成功: topic={}, group={}, queueId={}, 获取消息批次数量={}",
+                topic, group, queueId, result.size());
         } else {
             totalMisses.incrementAndGet();
+            log.debug("从缓存中未找到可用消息: topic={}, group={}, queueId={}", topic, group, queueId);
         }
-
-        log.debug("Retrieved {} available message batches from cache for topic: {}, group: {}, queueId: {}",
-            result.size(), topic, group, queueId);
 
         return result;
     }
@@ -326,7 +328,7 @@ public class ShardingKeyCache {
             // 检查消息是否过期
             if (message.isExpired(MAX_CACHE_TIME)) {
                 totalCachedMessages.decrementAndGet();
-                log.warn("Removed expired cached message: {}", message);
+                log.warn("移除过期缓存消息: {}", message);
                 continue;
             }
 
@@ -347,12 +349,13 @@ public class ShardingKeyCache {
 
         if (!result.isEmpty()) {
             totalHits.incrementAndGet();
+            log.info("按ShardingKey从缓存中获取可用消息成功: topic={}, group={}, queueId={}, shardingKey={}, 获取消息批次数量={}",
+                topic, group, queueId, shardingKey, result.size());
         } else {
             totalMisses.incrementAndGet();
+            log.debug("按ShardingKey从缓存中未找到可用消息: topic={}, group={}, queueId={}, shardingKey={}",
+                topic, group, queueId, shardingKey);
         }
-
-        log.debug("Retrieved {} available message batches for shardingKey: {} from cache for topic: {}, group: {}, queueId: {}",
-            result.size(), shardingKey, topic, group, queueId);
 
         return result;
     }
