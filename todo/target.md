@@ -123,52 +123,6 @@ Pop的顺序性是通过 `ConsumerOrderInfoManager` 中为每个 `topic@group:qu
 基于这个思路，pop 消费应当先读取，后分发，并在没有消息的时候挂起长轮询，ack 释放 sharding key 的时候唤醒长轮询。具体流程为：
 
 #### pop 消费步骤
-```puml
-@startuml
-start
-
-:开始 Pop 请求;
-:步骤1: 检查 attemptId;
-
-if (attemptId 已存在?) then (是)
-  :从 RocksDB 读取 offset;
-  :根据 offset 从 store 取消息返回;
-  stop
-else (否)
-  :步骤2: 检查过期消息和释放锁的消息;
-  if (有可用消息?) then (是)
-    :直接返回消息并添加锁;
-    stop
-  else (否)
-    :步骤3: 乐观批量读取;
-    :从 CommitLog 批量读取消息;
-		:更新 pull offset;
-    :步骤4: 内存分组与过滤;
-    :解析每条消息的 shardingKey;
-    :查询 ShardingKeyLockManager;
-    :按 shardingKey 分组并标记锁定状态;
-    :记录 offset 到 shardingKey 映射;
-    
-    :步骤5: 处理结果;
-    if (有未锁定的消息?) then (是)
-			:将 attemptId-offsets 存入 RocksDB;
-      :记录 attemptId 到 Set;
-      :返回 GetMessageResult;
-      :锁定这些消息的 shardingKey;
-      stop
-    else (否)
-      :记录被阻塞消息到 Map<offset, shardingKey>;
-      :将 GetMessageResult 存入 RocksDB;
-      :挂起长轮询;
-      stop
-    endif
-  endif
-endif
-
-@enduml
-
-```
-
 ##### 步骤 1：检查 attemptId
 要点：
 
@@ -299,12 +253,308 @@ Set<String/* attemptId */> attemptId = new ConcurrentHashMap.newKeySet();
 - 优先考虑性能和用户体验
 - 确保代码的可读性和可维护性
 
-~~OrderedConsumptionManager 接口中定义了顺序消息的管理接口，原先的方法的实现是 QueueLevelConsumerManager，
-现在需要你帮我根据上面的开发原则实现一下 src/main/java/org/apache/rocketmq/broker/offset/order/ShardingKeyLevelConsumerManager.java，
-并且增加单元测试。~~
-
-当前的 org.apache.rocketmq.broker.offset.order.ShardingKeyLevelConsumerManager.update 的实现有问题，
-他应该将传入的 getMessageResult 当中被阻塞的 shardingKey 的 result 给删去，然后返回其他 result 给用户并加锁。
 产生的 markdown 文件写在 todo 文件夹下，java 文件在他应该所在的位置
 
-现在的问题是，锁释放的时候，另一个后面的 pop 请求刚好拿了消息，导致顺序不对了
+# 问题背景
+现在的问题是，ack 请求导致锁释放的时候，另一个后面的 pop 请求刚好拿了消息，导致顺序不对了。
+比如有 a1 a2 a3，a1 锁被释放的时候，a2 a3 被不同请求读取，a3 判断锁被释放了，导致 a3 先于 a2 被消费。
+已经加了锁保证了 pop 请求是串行的。我现在想利用已经存在的记录了暂时不能分发的消息的 ConcurrentLinkedQueue，当 ack 的时候将解锁的一批（不止一条） shardingKey 消息放入可用队列，
+如果可用队列中有消息，那么 pop 先从可用队列中取消息。
+
+# 方案设计
+ShardingKeyCache 不应只有一个“可用”队列，而应该包含两个部分：
+
+不可用缓存 (Unavailable Cache)：存放那些被乐观读取出来，但因 ShardingKey 被锁定而无法立即分发的消息。这些消息是“待激活”状态。
+可用缓存 (Available Cache)：存放那些因为锁被释放（通过 ACK 或超时）而被“激活”的消息。POP 请求会优先从这里获取消息。
+
+
+# 详细设计
+**1. POP 流程**
+
+1. **【新增】步骤 0：优先从可用缓存消费**
+
+    - POP 请求到达后，**首先**检查 `ShardingKeyCache` 的**可用缓存**中是否有对应 `topic-group-queueId` 的消息。
+    - 如果有，直接从缓存中取出消息，为它们创建锁，然后返回给消费者。**这一步完全绕过了对 Store 的读取**，高效且能保证顺序。
+    - 如果可用缓存没有消息，再执行后续步骤。
+
+2. **步骤 1：乐观读取 (Optimistic Read)**
+
+    - 按原计划，从 `MessageStore` 批量读取消息。
+
+3. **步骤 2：过滤与分流 (Filter and Divert)**
+
+    - 在 `ShardingKeyLevelConsumerManager.update()` 方法中遍历读取到的消息。
+
+    - 对于可用的消息 (isLocked=false)
+
+      ：
+
+        - 按原逻辑处理：加入 `availableShardingKeyOffsets`，最终创建锁并返回给消费者。
+
+    - 对于被阻塞的消息 (isLocked=true)
+
+      ：
+
+        - **【核心改造】** 不要丢弃它们！将这些消息（包含 `ByteBuffer`、`offset` 等完整信息）存入 `ShardingKeyCache` 的**不可用缓存**。
+        - 这个“不可用缓存”内部需要按 ShardingKey 组织，并且保证同一个 ShardingKey 的消息是按 `offset` 有序存储的（例如，`Map<ShardingKey, List<CachedMessage>>`）。
+
+**2. ACK 流程**
+
+1. **步骤 1：释放锁 (Release Lock)**
+    - 在 `ShardingKeyLockManager.releaseLock()` 中，当一个 ShardingKey 的最后一个 offset被 ACK，锁被彻底移除时...
+2. **步骤 2：激活消息 (Activate Messages)**
+    - **【核心改造】** 锁被移除后，立刻以该 ShardingKey 为凭据，去 `ShardingKeyCache` 的**不可用缓存**中查找所有等待这个 Key 的消息。
+    - 将找到的这一批消息（比如 `a2`, `a3`），**按照 offset 顺序**，从**不可用缓存**移动到**可用缓存**。
+    - 这个移动操作必须是原子的，以保证顺序。
+3. **步骤 3：唤醒长轮询 (Notify)**
+    - 在消息被移入可用缓存后，调用 `notifyMessageArriving()`。这样，之前因为没有可用消息而挂起的 POP 请求就会被唤醒，并立刻在步骤 0 中从可用缓存拿到刚刚被激活的消息。
+
+**这个机制如何解决问题？**
+
+当 `a1` 被 ACK，`A` 的锁被释放后，`a2` 和 `a3` 会被立即、按顺序地从“不可用”状态激活为“可用”状态。下一个 POP 请求（无论是 POP-3 还是 POP-4）过来，都会优先从“可用缓存”中获取，并且因为 `ConcurrentLinkedQueue` 的 FIFO 特性，它会先拿到 `a2`，再拿到 `a3`，从而保证了消费的顺序性。
+
+
+## 一些可能的改动，你可以参考
+#### 1. `ShardingKeyCache.java` 的改造
+
+你当前的 `ShardingKeyCache` 设计需要增强，以区分“可用”和“不可用”消息。`addUnavailableMessage` 方法目前是空的，需要实现。
+
+```
+java
+
+
+// ShardingKeyCache.java
+
+public class ShardingKeyCache {
+    // ...
+
+    // 可用消息队列，结构不变
+    private final ConcurrentHashMap<String/*queueKey*/, ConcurrentLinkedQueue<CachedMessage>> availableMessagesMap;
+
+    // 【新增】不可用消息缓存：QueueKey -> ShardingKey -> 有序的消息列表
+    private final ConcurrentHashMap<String/*queueKey*/, ConcurrentHashMap<String/*shardingKey*/, ConcurrentLinkedQueue<CachedMessage>>> unavailableMessagesMap;
+
+    // ...
+
+    /**
+     * 【实现】添加暂时不可用的消息到缓存
+     */
+    public void addUnavailableMessage(String topic, String group, int queueId, String shardingKey, GetMessageResult messageResult, List<Long> offsets) {
+        if (messageResult == null || messageResult.getMessageBufferList() == null || messageResult.getMessageBufferList().isEmpty()) {
+            return;
+        }
+
+        // 注意：这里需要将 GetMessageResult 按 offset 拆分成单个 CachedMessage
+        // 因为一个 GetMessageResult 可能包含多个 offset
+        for (int i = 0; i < messageResult.getMessageBufferList().size(); i++) {
+            String queueKey = MessageShardingKeyUtil.buildTopicGroupQueueIdentifier(topic, group, queueId);
+            ConcurrentHashMap<String, ConcurrentLinkedQueue<CachedMessage>> shardingKeyMap =
+                unavailableMessagesMap.computeIfAbsent(queueKey, k -> new ConcurrentHashMap<>());
+            ConcurrentLinkedQueue<CachedMessage> messageQueue =
+                shardingKeyMap.computeIfAbsent(shardingKey, k -> new ConcurrentLinkedQueue<>());
+
+            // 假设我们能为单个消息创建一个"子GetMessageResult"或类似结构
+            // 为了简化，我们假设一个 GetMessageResult 只对应一个 offset 和 shardingKey
+            // 在你的 update 逻辑中，你需要将批量的 GetMessageResult 拆分
+            GetMessageResult singleMsgResult = createSingleMessageResult(messageResult, i); // 这是一个辅助方法
+            long offset = offsets.get(i);
+            
+            CachedMessage unavailableMessage = new CachedMessage(topic, group, queueId, shardingKey, singleMsgResult, offset);
+            messageQueue.offer(unavailableMessage);
+            // 同样需要考虑队列大小限制
+        }
+    }
+
+    /**
+     * 【新增】激活指定shardingKey的消息
+     */
+    public boolean activateMessages(String topic, String group, int queueId, String shardingKey) {
+        String queueKey = MessageShardingKeyUtil.buildTopicGroupQueueIdentifier(topic, group, queueId);
+        ConcurrentHashMap<String, ConcurrentLinkedQueue<CachedMessage>> shardingKeyMap = unavailableMessagesMap.get(queueKey);
+        if (shardingKeyMap == null) {
+            return false;
+        }
+
+        ConcurrentLinkedQueue<CachedMessage> messageQueue = shardingKeyMap.remove(shardingKey);
+        if (messageQueue == null || messageQueue.isEmpty()) {
+            return false;
+        }
+
+        ConcurrentLinkedQueue<CachedMessage> availableQueue = availableMessagesMap.computeIfAbsent(queueKey, k -> new ConcurrentLinkedQueue<>());
+        availableQueue.addAll(messageQueue); // 将整个队列的消息原子性地移入可用队列
+
+        log.info("Activated {} messages for shardingKey: {}", messageQueue.size(), shardingKey);
+        return true;
+    }
+
+    // ... 其他方法
+}
+```
+
+#### 2. `ShardingKeyLevelConsumerManager.java` 的改造
+
+这是逻辑改动的核心。
+
+```
+java
+
+
+// ShardingKeyLevelConsumerManager.java
+
+public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManager {
+    // ...
+
+    // 【新增】PopMessageProcessor 需要能调用这个方法
+    public GetMessageResult popMessageFromCache(String topic, String group, int queueId, int maxCount) {
+        List<ShardingKeyCache.CachedMessage> cachedMessages = cache.getAvailableMessages(topic, group, queueId, maxCount);
+        if (cachedMessages.isEmpty()) {
+            return null;
+        }
+        
+        // 将 List<CachedMessage> 重新组装成一个 GetMessageResult
+        // 并为这些消息在 update 方法中创建锁
+        GetMessageResult result = buildGetMessageResultFromCache(cachedMessages);
+        // ... (省略组装逻辑)
+        return result;
+    }
+
+
+    @Override
+    public void update(String attemptId, boolean isRetry, String topic, String group, int queueId,
+        long popTime, long invisibleTime, List<Long> msgQueueOffsetList,
+        StringBuilder orderInfoBuilder, GetMessageResult getMessageResult) {
+        // ...
+        
+        // 【改造】遍历消息，进行分流
+        for (int i = 0; i < getMessageResult.getMessageBufferList().size(); i++) {
+            ByteBuffer byteBuffer = getMessageResult.getMessageBufferList().get(i);
+            String shardingKey = MessageShardingKeyUtil.extractShardingKeyFromBuffer(byteBuffer);
+            long currentOffset = msgQueueOffsetList.get(i);
+
+            if (lockManager.isLocked(topic, group, queueId, shardingKey, attemptId)) {
+                unavailableIndices.add(i);
+                unavailableShardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(currentOffset);
+                log.info("消息被锁住: shardingKey={}, offset={}", shardingKey, currentOffset);
+            } else {
+                // ... 原有逻辑
+                availableShardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(currentOffset);
+            }
+        }
+
+        // 【改造】将被阻塞的消息存入不可用缓存
+        // 注意：你需要一种方法将 GetMessageResult 和 offsets 拆分，然后存入缓存
+        // 这是一个复杂点，你需要设计如何高效地存储和重建这部分消息
+        GetMessageResult unavailableMessages = getMessageResult.getMessages(unavailableIndices);
+        cache.addUnavailableMessages(topic, group, queueId, unavailableShardingKeyOffsets, unavailableMessages);
+        
+        // 移除被阻塞的消息
+        getMessageResult.removeIndices(unavailableIndices);
+        
+        // ... 后续逻辑不变
+    }
+
+    @Override
+    public long commitAndNext(String topic, String group, int queueId, long queueOffset, long popTime) {
+        // ...
+        
+        // 【改造】在释放锁成功且锁被完全移除后，激活缓存中的消息
+        String shardingKey = lockManager.findShardingKeyByOffset(...);
+        boolean fullyReleased = lockManager.releaseLock(topic, group, queueId, queueOffset, popTime);
+
+        if (fullyReleased) {
+            // 这个 fullyReleased 信号需要 ShardingKeyLockManager 提供，表示这个shardingKey上已没有任何offset
+            if (cache.activateMessages(topic, group, queueId, shardingKey)) {
+                // 激活成功后，唤醒长轮询
+                brokerController.getPopMessageProcessor().notifyMessageArriving(topic, queueId, group);
+            }
+            // ...
+        }
+        
+        // ... 关于 minOffset 的逻辑，我发现一个潜在问题，见文末附加说明
+    }
+}
+```
+
+#### 3. `ShardingKeyLockManager.java` 的改造
+
+需要提供一个明确的信号，告知调用者锁已被**完全释放**。
+
+```
+java
+
+
+// ShardingKeyLockManager.java
+
+public class ShardingKeyLockManager {
+    // ...
+
+    /**
+     * @return true 如果这个 offset 是该 shardingKey 下的最后一个 offset，锁被彻底释放
+     */
+    public boolean releaseLock(String topic, String group, int queueId, long offset, long popTime) {
+        // ... 找到 lock ...
+        
+        boolean removed = lock.removeOffset(offset);
+        if (removed) {
+            removeOffsetToShardingKey(topicGroupKey, queueId, offset);
+            if (lock.isEmpty()) {
+                shardingKeyMap.remove(shardingKeyHash);
+                cancelExpireTask(topic, group, queueId, shardingKeyHash);
+                notifyLongPolling(topic, group, queueId); // 这里的唤醒可以移到Manager层，由激活消息后统一唤醒
+                log.info("ShardingKey lock fully released: {}", shardingKeyHash);
+                return true; // 返回 true 表示锁已完全释放
+            }
+        }
+        return false; // 返回 false 表示锁内还有其他 offset
+    }
+}
+```
+
+------
+
+### 附加说明：关于 `minOffset` 的严重问题
+
+在你提供的 `commitAndNext` 方法中，`minOffset` 的更新逻辑存在严重缺陷，可能导致消费位点错误提交和消息丢失。
+
+```
+java
+
+
+// ShardingKeyLevelConsumerManager.java#commitAndNext
+return minOffset.updateAndGet(current -> {
+   if (current == queueOffset) {
+       log.info("当前提交的位点 {} 和最小值相等，更新最小值为: {}", current, current + 1);
+       return current + 1; // 危险！
+   } else {
+       log.info("当前提交的位点 {} 和最小值不同，更新最小值不变", current);
+       return current;
+   }
+});
+```
+
+**问题所在**：
+`minOffset` 记录的是所有“飞行中”（in-flight）消息的最小位点。当这个最小位点的消息被 ACK 时，你简单地将其 `+1` 作为新的 `minOffset`。这是不正确的。
+
+**反例**：
+
+1. 飞行中的消息有 `offset=100` (key A), `offset=105` (key B), `offset=110` (key C)。
+2. `minOffset` 当前是 `100`。
+3. `offset=100` 被 ACK。
+4. 你的代码将 `minOffset` 更新为 `101`。
+5. **错误**：此时，真正的最小飞行中消息位点是 `105`，而不是 `101`。如果 Broker 此时宕机重启，它可能会认为 `101` 是下一个该消费的位点，导致 `101-104` 的消息被错误地跳过（如果它们已经被ACK了）或者重复消费。消费位点应该只能是**连续已确认**的最大位点。
+
+**正确做法**：
+消费位点的提交应该是一个更严谨的过程。在 ShardingKey 模式下，因为消费是并发和乱序的，所以**无法提交一个连续的消费位点**。这正是 POP 模式相对于 PULL 模式的一个核心区别。
+
+在 POP 模式下，消费位点的作用被弱化了。Broker 内部通过 `PopConsumerRecord` (在你的实现中是 `ShardingKeyLock`) 来追踪每一条消息的消费状态。`ConsumerOffsetManager` 中存储的位点，更多是作为一个**启动时**的参考点（`pull offset` 的起点）。
+
+因此，`commitAndNext` 的返回值应该是Broker内部使用的，表示“这个ACK是否有效”，而不是用来更新一个全局的消费位点。
+
+- 建议：移除 `minOffset` 成员变量。`commitAndNext`的主要职责是释放锁和激活缓存消息。它返回的`long`
+
+  值应该遵循 POP 模式的约定：
+    - `>=0`：表示成功，但这个值在 ShardingKey 模式下意义不大。
+    - `-1`：非法操作。
+    - `-2`：无需提交（例如，ACK 了一个已经被 ACK 的消息）。
+真正的消费进度由 `ShardingKeyLockManager` 的状态来体现。
+

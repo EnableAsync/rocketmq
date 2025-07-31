@@ -205,6 +205,7 @@ public class ShardingKeyLockManager {
 
     /**
      * 释放指定 offset 对应的 sharding key 锁
+     * @return true 如果这个 offset 是该 shardingKey 下的最后一个 offset，锁被彻底释放
      */
     public boolean releaseLock(String topic, String group, int queueId, long offset, long popTime) {
         log.info("确认消息: {}|{}|{}|{}", topic, group, queueId, offset);
@@ -248,8 +249,7 @@ public class ShardingKeyLockManager {
 
             // 如果锁为空，则完全释放该sharding key锁
             if (lock.isEmpty()) {
-//                 System.out.println("释放了 shardingKey 的锁: " + lock);
-                log.info("释放了 shardingKey 的锁: " + lock);
+                log.info("释放了 shardingKey 的锁: {}", shardingKeyHash);
                 shardingKeyMap.remove(shardingKeyHash);
 
                 // 取消定时任务
@@ -259,13 +259,23 @@ public class ShardingKeyLockManager {
                     shardingKeyHash, topic, group, queueId);
 
                 // 唤醒长轮询
-//                System.out.println("唤醒了长轮询");
                 log.info("唤醒了长轮询");
                 notifyLongPolling(topic, group, queueId);
+
+                return true; // 返回 true 表示锁已完全释放
             }
         }
 
-        return removed;
+        return false; // 返回 false 表示锁内还有其他 offset
+    }
+
+    /**
+     * 公开方法：根据 offset 查找对应的 sharding key
+     * 用于外部调用（如 ShardingKeyLevelConsumerManager）
+     */
+    public String findShardingKeyByOffset(String topic, String group, int queueId, long offset) {
+        String topicGroupKey = MessageShardingKeyUtil.buildTopicGroupIdentifier(topic, group);
+        return findShardingKeyByOffset(topicGroupKey, queueId, offset);
     }
 
     /**

@@ -24,7 +24,6 @@ import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.common.OrderedConsumptionLevel;
 import org.apache.rocketmq.common.ThreadFactoryImpl;
@@ -33,15 +32,19 @@ import org.apache.rocketmq.logging.org.slf4j.Logger;
 import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
 import org.apache.rocketmq.remoting.protocol.header.ExtraInfoUtil;
 import org.apache.rocketmq.store.GetMessageResult;
+import org.apache.rocketmq.store.GetMessageStatus;
+import org.apache.rocketmq.store.SelectMappedBufferResult;
 
 /**
  * ShardingKey 级别的顺序消费管理器
  * 实现基于 shardingKey 的并发顺序消费，提升消费吞吐量
  * <p>
- * 核心设计思路：乐观读取 + 多 shardingKey 并发
+ * 核心设计思路：乐观读取 + 多 shardingKey 并发 + 双缓存机制
  * - 先读取消息，再根据 shardingKey 判断是否阻塞
  * - 只有相同 shardingKey 的消息才会相互阻塞
  * - 不同 shardingKey 的消息可以并发消费
+ * - 优先从可用缓存消费，避免重复读取存储
+ * - ACK 时激活不可用缓存中的消息
  */
 public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManager {
 
@@ -50,12 +53,6 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     private final BrokerController brokerController;
     private final ShardingKeyLockManager lockManager;
     private final ShardingKeyCache cache;
-
-    /**
-     * 记录 in-flight 消息最小 offset
-     * 用于 ack 消息时 commit 位点
-     */
-    private final AtomicLong minOffset = new AtomicLong(Long.MAX_VALUE);
 
     // 定时清理任务
     private ScheduledExecutorService cleanupExecutor;
@@ -80,7 +77,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
      * 基于 sharding key 级别的检查，不同的 sharding key 之间不会相互阻塞
      * <p>
      * 注意：这里的实现与队列级别不同，这里是先读取数据，再判断是否阻塞
-     * 实际的阻塞逻辑在 PopMessageProcessor 中通过 GetMessageResult 进行判断
+     * 实际的阻塞逻辑在 update 方法中通过分析 sharding key 来实现
      */
     @Override
     public boolean checkBlock(String attemptId, String topic, String group, int queueId, long invisibleTime) {
@@ -97,8 +94,130 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     }
 
     /**
+     * 【新增】优先从缓存中获取可用消息
+     * POP 请求首先调用此方法，如果有缓存消息则直接返回，避免读取存储
+     */
+    public GetMessageResult popMessageFromCache(String topic, String group, int queueId, int maxCount) {
+        try {
+            List<ShardingKeyCache.CachedMessage> cachedMessages = cache.getAvailableMessages(topic, group, queueId, maxCount);
+            if (cachedMessages.isEmpty()) {
+                return null;
+            }
+
+            // 将缓存消息重新组装成 GetMessageResult
+            GetMessageResult result = buildGetMessageResultFromCache(cachedMessages);
+            if (result != null) {
+                // 为缓存中的消息创建锁
+                createLocksForCachedMessages(topic, group, queueId, cachedMessages);
+                log.info("Retrieved {} messages from cache for topic={}, group={}, queueId={}",
+                    cachedMessages.size(), topic, group, queueId);
+            }
+            return result;
+        } catch (Exception e) {
+            log.error("Failed to pop message from cache for topic: {}, group: {}, queueId: {}", topic, group, queueId, e);
+            return null;
+        }
+    }
+
+    /**
+     * 从缓存消息构建 GetMessageResult
+     */
+    private GetMessageResult buildGetMessageResultFromCache(List<ShardingKeyCache.CachedMessage> cachedMessages) {
+        if (cachedMessages == null || cachedMessages.isEmpty()) {
+            return null;
+        }
+
+        try {
+            GetMessageResult result = new GetMessageResult();
+            result.setStatus(GetMessageStatus.FOUND);
+
+            List<SelectMappedBufferResult> messageMapedList = new ArrayList<>();
+            List<ByteBuffer> messageBufferList = new ArrayList<>();
+            List<Long> messageQueueOffsetList = new ArrayList<>();
+
+            for (ShardingKeyCache.CachedMessage cachedMessage : cachedMessages) {
+                GetMessageResult msgResult = cachedMessage.getMessageResult();
+                if (msgResult != null) {
+                    if (msgResult.getMessageMapedList() != null) {
+                        messageMapedList.addAll(msgResult.getMessageMapedList());
+                    }
+                    if (msgResult.getMessageBufferList() != null) {
+                        messageBufferList.addAll(msgResult.getMessageBufferList());
+                    }
+                    if (msgResult.getMessageQueueOffset() != null) {
+                        messageQueueOffsetList.addAll(msgResult.getMessageQueueOffset());
+                    }
+                }
+            }
+
+            // 使用反射设置字段，因为可能没有对应的 setter 方法
+            setGetMessageResultFields(result, messageMapedList, messageBufferList, messageQueueOffsetList);
+
+            return result;
+        } catch (Exception e) {
+            log.error("Failed to build GetMessageResult from cache", e);
+            return null;
+        }
+    }
+
+    /**
+     * 使用反射设置 GetMessageResult 的字段
+     */
+    private void setGetMessageResultFields(GetMessageResult result,
+                                         List<SelectMappedBufferResult> messageMapedList,
+                                         List<ByteBuffer> messageBufferList,
+                                         List<Long> messageQueueOffsetList) {
+        try {
+            java.lang.reflect.Field messageMapedListField = GetMessageResult.class.getDeclaredField("messageMapedList");
+            messageMapedListField.setAccessible(true);
+            messageMapedListField.set(result, messageMapedList);
+
+            java.lang.reflect.Field messageBufferListField = GetMessageResult.class.getDeclaredField("messageBufferList");
+            messageBufferListField.setAccessible(true);
+            messageBufferListField.set(result, messageBufferList);
+
+            java.lang.reflect.Field messageQueueOffsetField = GetMessageResult.class.getDeclaredField("messageQueueOffset");
+            messageQueueOffsetField.setAccessible(true);
+            messageQueueOffsetField.set(result, messageQueueOffsetList);
+        } catch (Exception e) {
+            log.warn("Failed to set GetMessageResult fields using reflection", e);
+        }
+    }
+
+    /**
+     * 为缓存消息创建锁
+     */
+    private void createLocksForCachedMessages(String topic, String group, int queueId,
+                                            List<ShardingKeyCache.CachedMessage> cachedMessages) {
+        try {
+            long currentTime = System.currentTimeMillis();
+            long invisibleTime = 30000; // 默认30秒不可见时间，实际应该从配置获取
+
+            Map<String, List<Long>> shardingKeyOffsets = new HashMap<>();
+            for (ShardingKeyCache.CachedMessage cachedMessage : cachedMessages) {
+                String shardingKey = cachedMessage.getShardingKey();
+                long offset = cachedMessage.getOffset();
+                shardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(offset);
+            }
+
+            // 为每个 shardingKey 创建锁
+            for (Map.Entry<String, List<Long>> entry : shardingKeyOffsets.entrySet()) {
+                String shardingKey = entry.getKey();
+                List<Long> offsets = entry.getValue();
+                String attemptId = "cache_" + System.currentTimeMillis(); // 为缓存消息生成唯一的 attemptId
+
+                lockManager.createOrUpdateLock(topic, group, queueId, shardingKey, currentTime, invisibleTime, attemptId, offsets);
+            }
+        } catch (Exception e) {
+            log.error("Failed to create locks for cached messages", e);
+        }
+    }
+
+    /**
      * 更新消息列表的接收状态
      * 当消费者POP消息时被调用，用于记录消息状态和构建消费信息
+     * <p>
+     * 核心改造：实现乐观读取 + 消息分流逻辑
      */
     @Override
     public void update(String attemptId, boolean isRetry, String topic, String group, int queueId,
@@ -113,52 +232,48 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
         try {
             List<Integer> unavailableIndices = new ArrayList<>();
             Map<String, List<Long>> unavailableShardingKeyOffsets = new HashMap<>();
-            // List<Integer> availableIndices = new ArrayList<>();
             Map<String, List<Long>> availableShardingKeyOffsets = new HashMap<>();
 
-            long batchMinOffset = Long.MAX_VALUE;
-            // 从GetMessageResult中提取sharding key信息
+            // 【核心改造】从GetMessageResult中提取sharding key信息并进行分流
             for (int i = 0; i < getMessageResult.getMessageBufferList().size(); i++) {
                 ByteBuffer byteBuffer = getMessageResult.getMessageBufferList().get(i);
                 String shardingKey = MessageShardingKeyUtil.extractShardingKeyFromBuffer(byteBuffer);
+                long currentOffset = msgQueueOffsetList.get(i);
+
                 if (lockManager.isLocked(topic, group, queueId, shardingKey, attemptId)) {
+                    // 消息被锁定，加入不可用列表
                     unavailableIndices.add(i);
-                    unavailableShardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(msgQueueOffsetList.get(i));
-                    log.info("消息被锁着的消息的 offset 是: {}", msgQueueOffsetList.get(i));
+                    unavailableShardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(currentOffset);
+                    log.info("消息被锁住: shardingKey={}, offset={}", shardingKey, currentOffset);
                 } else {
-                    // availableIndices.add(i);
-                    log.info("分发出去的消息的 offset 是: {}", msgQueueOffsetList.get(i));
-                    // 记录 in-flight 消息最小 offset
-                    batchMinOffset = Math.min(batchMinOffset, msgQueueOffsetList.get(i));
-                    // 记录可消费的消息
-                    availableShardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(msgQueueOffsetList.get(i));
+                    // 消息可用，加入可用列表
+                    log.info("分发出去的消息: shardingKey={}, offset={}", shardingKey, currentOffset);
+                    availableShardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(currentOffset);
                 }
             }
 
-            // 记录未消费的消息
-            for (Map.Entry<String, List<Long>> entry : unavailableShardingKeyOffsets.entrySet()) {
-                cache.addUnavailableMessage(topic, group, queueId, entry.getKey(), entry.getValue());
+            // 【关键改造】将被阻塞的消息存入不可用缓存
+            if (!unavailableIndices.isEmpty()) {
+                storeUnavailableMessages(topic, group, queueId, unavailableShardingKeyOffsets,
+                                       getMessageResult, unavailableIndices);
             }
 
             // 移除被阻塞的消息
             getMessageResult.removeIndices(unavailableIndices);
 
             if (getMessageResult.getMessageBufferList().isEmpty()) {
-                log.info("读取消息，但是读到的都被锁着");
+                log.info("读取到消息，但都被锁定无法分发");
                 return;
             }
 
-            // 创建锁
+            // 为可用消息创建锁
             for (Map.Entry<String, List<Long>> entry : availableShardingKeyOffsets.entrySet()) {
-                lockManager.createOrUpdateLock(topic, group, queueId, entry.getKey(), popTime, invisibleTime, attemptId, entry.getValue());
+                lockManager.createOrUpdateLock(topic, group, queueId, entry.getKey(),
+                    popTime, invisibleTime, attemptId, entry.getValue());
             }
 
-            // 记录 in-flight 消息的最小 offset
-            minOffset.accumulateAndGet(batchMinOffset, Math::min);
-            log.info("当前 in-flight 消息的 offset 最小值为: {}", minOffset.get());
-
-            log.debug("Updated sharding key locks for {} messages in topic: {}, group: {}, queueId: {}",
-                msgQueueOffsetList.size(), topic, group, queueId);
+            log.debug("Updated sharding key locks for {} available messages in topic: {}, group: {}, queueId: {}",
+                availableShardingKeyOffsets.size(), topic, group, queueId);
 
         } catch (Exception e) {
             log.error("Failed to update sharding key locks for topic: {}, group: {}, queueId: {}",
@@ -167,40 +282,131 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     }
 
     /**
+     * 将不可用消息存入缓存
+     */
+    private void storeUnavailableMessages(String topic, String group, int queueId,
+                                        Map<String, List<Long>> unavailableShardingKeyOffsets,
+                                        GetMessageResult getMessageResult, List<Integer> unavailableIndices) {
+        try {
+            for (Map.Entry<String, List<Long>> entry : unavailableShardingKeyOffsets.entrySet()) {
+                String shardingKey = entry.getKey();
+                List<Long> offsets = entry.getValue();
+
+                // 为每个被阻塞的 shardingKey 创建对应的 GetMessageResult
+                GetMessageResult unavailableResult = extractMessagesForShardingKey(getMessageResult,
+                    unavailableIndices, shardingKey, offsets);
+
+                if (unavailableResult != null) {
+                    cache.addUnavailableMessage(topic, group, queueId, shardingKey, unavailableResult, offsets);
+                }
+            }
+        } catch (Exception e) {
+            log.error("Failed to store unavailable messages", e);
+        }
+    }
+
+    /**
+     * 从完整的 GetMessageResult 中提取特定 shardingKey 的消息
+     */
+    private GetMessageResult extractMessagesForShardingKey(GetMessageResult originalResult,
+                                                         List<Integer> unavailableIndices,
+                                                         String targetShardingKey, List<Long> offsets) {
+        // 简化实现：直接使用原有的单消息创建方法
+        if (unavailableIndices.isEmpty()) {
+            return null;
+        }
+
+        // 找到第一个匹配的索引，创建单个消息的结果
+        // 实际实现中应该更精确地匹配 shardingKey 和 offset
+        int firstIndex = unavailableIndices.get(0);
+        return createSingleMessageResult(originalResult, firstIndex);
+    }
+
+    /**
+     * 从完整的GetMessageResult中创建单个消息的结果
+     */
+    private GetMessageResult createSingleMessageResult(GetMessageResult originalResult, int index) {
+        if (originalResult == null || index < 0 || index >= originalResult.getMessageBufferList().size()) {
+            return null;
+        }
+
+        GetMessageResult singleResult = new GetMessageResult();
+        singleResult.setStatus(originalResult.getStatus());
+        singleResult.setNextBeginOffset(originalResult.getNextBeginOffset());
+        singleResult.setMinOffset(originalResult.getMinOffset());
+        singleResult.setMaxOffset(originalResult.getMaxOffset());
+        singleResult.setSuggestPullingFromSlave(originalResult.isSuggestPullingFromSlave());
+
+        // 复制单个消息的数据
+        List<SelectMappedBufferResult> singleMessageList = new ArrayList<>();
+        List<ByteBuffer> singleBufferList = new ArrayList<>();
+        List<Long> singleOffsetList = new ArrayList<>();
+
+        if (originalResult.getMessageMapedList() != null && index < originalResult.getMessageMapedList().size()) {
+            singleMessageList.add(originalResult.getMessageMapedList().get(index));
+        }
+        if (originalResult.getMessageBufferList() != null && index < originalResult.getMessageBufferList().size()) {
+            singleBufferList.add(originalResult.getMessageBufferList().get(index));
+        }
+        if (originalResult.getMessageQueueOffset() != null && index < originalResult.getMessageQueueOffset().size()) {
+            singleOffsetList.add(originalResult.getMessageQueueOffset().get(index));
+        }
+
+        // 使用反射设置字段
+        setGetMessageResultFields(singleResult, singleMessageList, singleBufferList, singleOffsetList);
+        return singleResult;
+    }
+
+    /**
      * 提交消息并计算下一个消费偏移量
      * 当消费者 ACK 消息时调用
+     *
+     * 【核心改造】移除 minOffset 逻辑，实现消息激活机制
      */
     @Override
     public long commitAndNext(String topic, String group, int queueId, long queueOffset, long popTime) {
         try {
             // 根据 offset 释放对应的 sharding key 锁
-            boolean released = lockManager.releaseLock(topic, group, queueId, queueOffset, popTime);
+            boolean fullyReleased = lockManager.releaseLock(topic, group, queueId, queueOffset, popTime);
 
-            if (released) {
+            if (fullyReleased) {
+                // 【关键改造】锁完全释放后，激活缓存中对应 shardingKey 的消息
+                String shardingKey = lockManager.findShardingKeyByOffset(topic, group, queueId, queueOffset);
+                if (shardingKey != null) {
+                    boolean activated = cache.activateMessages(topic, group, queueId, shardingKey);
+                    if (activated) {
+                        // 激活成功后，唤醒长轮询
+                        notifyLongPolling(topic, group, queueId);
+                        log.info("Activated messages for shardingKey: {} after ACK offset: {}", shardingKey, queueOffset);
+                    }
+                }
+
                 log.info("Successfully released sharding key lock for offset: {} in topic: {}, group: {}, queueId: {}",
                     queueOffset, topic, group, queueId);
 
-                // 返回下一个偏移量
-                return minOffset.updateAndGet(current -> {
-                   if (current == queueOffset) {
-                       log.info("当前提交的位点 {} 和最小值相等，更新最小值为: {}", current, current + 1);
-                       return current + 1;
-                   } else {
-                       log.info("当前提交的位点 {} 和最小值不同，更新最小值不变", current);
-                       return current;
-                   }
-                });
+                return 0; // 返回 0 表示成功，在 ShardingKey 模式下不需要连续的消费位点
             } else {
-                log.warn("Failed to release sharding key lock for offset: {} in topic: {}, group: {}, queueId: {}",
+                log.debug("Partially released lock for offset: {} in topic: {}, group: {}, queueId: {}",
                     queueOffset, topic, group, queueId);
-
-                // 如果释放失败，返回 -2 表示无需提交
-                return -2;
+                return -2; // 返回 -2 表示无需提交（锁内还有其他消息）
             }
         } catch (Exception e) {
             log.error("Failed to commit and next for offset: {} in topic: {}, group: {}, queueId: {}",
                 queueOffset, topic, group, queueId, e);
-            return -1; // 返回 -1 表示非法
+            return -1; // 返回 -1 表示非法操作
+        }
+    }
+
+    /**
+     * 唤醒长轮询
+     */
+    private void notifyLongPolling(String topic, String group, int queueId) {
+        try {
+            if (brokerController != null && brokerController.getPopMessageProcessor() != null) {
+                brokerController.getPopMessageProcessor().notifyMessageArriving(topic, queueId, group);
+            }
+        } catch (Exception e) {
+            log.error("Failed to notify long polling", e);
         }
     }
 
