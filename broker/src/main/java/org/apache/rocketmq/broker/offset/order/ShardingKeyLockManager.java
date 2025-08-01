@@ -258,7 +258,7 @@ public class ShardingKeyLockManager {
                 if (activated) {
                     // 激活成功后，唤醒长轮询
                     notifyLongPolling(topic, group, queueId);
-                    log.info("消息ACK成功，激活ShardingKey缓存消息: shardingKey={}, offset={}", shardingKeyHash, offset);
+                    log.info("消息ACK成功，激活ShardingKey缓存消息并且唤醒了长轮询: shardingKey={}, offset={}", shardingKeyHash, offset);
                 } else {
                     log.warn("消息ACK成功，激活ShardingKey缓存消息失败: shardingKey={}, offset={}", shardingKeyHash, offset);
                 }

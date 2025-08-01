@@ -69,6 +69,7 @@ import org.slf4j.LoggerFactory;
 public class PopConsumerService extends ServiceThread {
 
     private static final Logger log = LoggerFactory.getLogger(LoggerName.ROCKETMQ_POP_LOGGER_NAME);
+    private static final Logger brokerLogger = LoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
     private static final long OFFSET_NOT_EXIST = -1L;
     private static final String ROCKSDB_DIRECTORY = "kvStore";
     private static final int[] REWRITE_INTERVALS_IN_SECONDS =
@@ -302,7 +303,6 @@ public class PopConsumerService extends ServiceThread {
     protected CompletableFuture<PopConsumerContext> getMessageAsync(CompletableFuture<PopConsumerContext> future,
         String clientHost, String groupId, String topicId, int queueId, int batchSize, MessageFilter filter,
         PopConsumerRecord.RetryType retryType) {
-
         return future.thenCompose(result -> {
 
             // pop request too much, should not add rest count here
@@ -325,14 +325,15 @@ public class PopConsumerService extends ServiceThread {
                 }
                 GetMessageResult cacheResult = getAvailableMessageResult(result.getAttemptId(), result.getPopTime(), result.getInvisibleTime(), groupId, topicId, queueId, batchSize);
                 if (cacheResult != null) {
-                    log.info("没有从 store 取消息，直接从 cache 中取消息, groupId={}, topicId={}, queueId={}, batchSize={}, offset={}",
+                    brokerLogger.info("没有从 store 取消息，直接从 cache 中取消息, groupId={}, topicId={}, queueId={}, batchSize={}, offset={}",
                         groupId, topicId, queueId, batchSize, cacheResult.getMaxOffset());
                     // 不走 store 读取消息，直接从 cache 中取消息
                     return CompletableFuture.completedFuture(result)
                         .thenApply(r -> handleGetMessageResult( // 更新位点
                             result, cacheResult, topicId, queueId, retryType, cacheResult.getMaxOffset()));
                 } else {
-
+                    brokerLogger.info("从 store 取消息，cache 中没有消息, groupId={}, topicId={}, queueId={}, batchSize={}",
+                        groupId, topicId, queueId, batchSize);
                 }
             }
 

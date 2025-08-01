@@ -223,6 +223,8 @@ public class ShardingKeyCache {
 
         log.info("添加不可用消息批次到缓存: topic={}, group={}, queueId={}, shardingKey={}, 消息数量={}",
             topic, group, queueId, shardingKey, offsets.size());
+
+        log.info("当前不可用消息缓存状态为: {}", unavailableMessagesMap);
     }
 
     /**
@@ -253,8 +255,8 @@ public class ShardingKeyCache {
         ConcurrentLinkedQueue<CachedMessage> availableQueue = availableMessagesMap.computeIfAbsent(queueKey, k -> new ConcurrentLinkedQueue<>());
         availableQueue.offer(cachedMessage);
 
-        log.info("激活消息批次成功: topic={}, group={}, queueId={}, shardingKey={}, 激活消息数量={}",
-            topic, group, queueId, shardingKey, cachedMessage.getOffsets().size());
+        log.info("激活消息批次成功: topic={}, group={}, queueId={}, shardingKey={}, 激活消息数量={}, 缓存状态为={}",
+            topic, group, queueId, shardingKey, cachedMessage.getOffsets().size(), availableMessagesMap);
         return true;
     }
 
@@ -262,6 +264,7 @@ public class ShardingKeyCache {
      * 获取指定队列的可用消息（优先从可用缓存获取）
      */
     public List<CachedMessage> getAvailableMessages(String topic, String group, int queueId, int maxCount) {
+        log.info("shardingKeyCache 从缓存中获取可用消息: topic={}, group={}, queueId={}, 最大获取消息批次数量={}", topic, group, queueId, maxCount);
         String queueKey = MessageShardingKeyUtil.buildTopicGroupQueueIdentifier(topic, group, queueId);
         ConcurrentLinkedQueue<CachedMessage> queue = availableMessagesMap.get(queueKey);
 
@@ -279,12 +282,12 @@ public class ShardingKeyCache {
                 break;
             }
 
-            // 检查消息是否过期
-            if (message.isExpired(MAX_CACHE_TIME)) {
-                totalCachedMessages.decrementAndGet();
-                log.warn("移除过期缓存消息: {}", message);
-                continue;
-            }
+//            // 检查消息是否过期
+//            if (message.isExpired(MAX_CACHE_TIME)) {
+//                totalCachedMessages.decrementAndGet();
+//                log.warn("移除过期缓存消息: {}", message);
+//                continue;
+//            }
 
             result.add(message);
             totalCachedMessages.decrementAndGet();
