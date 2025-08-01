@@ -223,6 +223,7 @@ public class ShardingKeyCache {
                 return new CachedMessage(topic, group, queueId, shardingKey, messageResult, offsets);
             } else {
                 for (int i = 0; i < offsets.size(); i++) {
+                    // TODO: 一直加可能会超
                     v.getMessageResult().addMessage(messageResult.getMessageMapedList().get(i), offsets.get(i));
                     v.getOffsets().addAll(offsets);
                 }
