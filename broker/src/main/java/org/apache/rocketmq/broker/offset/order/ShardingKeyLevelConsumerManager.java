@@ -139,6 +139,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
 
         // 直接使用第一个 CachedMessage 的 GetMessageResult
         // 因为每个 CachedMessage 代表一批完整的消息，可以直接返回
+        // 先不做 GetMessageResult 的合并
         GetMessageResult result = cachedMessages.get(0).getMessageResult();
 
         log.debug("构建缓存消息结果并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}",

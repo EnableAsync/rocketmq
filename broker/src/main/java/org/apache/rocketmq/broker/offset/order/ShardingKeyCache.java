@@ -33,7 +33,7 @@ import org.apache.rocketmq.store.SelectMappedBufferResult;
 /**
  * Sharding Key缓存管理类
  * 负责管理可用的过期消息和被释放锁的消息，提供快速访问能力
- *
+ * <p>
  * 核心设计：双缓存机制
  * - 可用消息缓存 (Available Cache)：存放因为锁被释放（通过 ACK 或超时）而被"激活"的消息
  * - 不可用消息缓存 (Unavailable Cache)：存放那些被乐观读取出来，但因 ShardingKey 被锁定而无法立即分发的消息
@@ -116,7 +116,7 @@ public class ShardingKeyCache {
         }
 
         public List<Long> getOffsets() {
-            return new ArrayList<>(offsets); // 返回副本防止外部修改
+            return offsets;
         }
 
         public long getCreateTime() {
@@ -136,7 +136,8 @@ public class ShardingKeyCache {
         }
     }
 
-    // 可用消息队列，按 topic@group@queueId 分组，不用区分 shardingKey 了
+    // 可用消息队列，按 topic@group@queueId 分组，里面的都是可用的，不用区分 shardingKey 了
+    // 分发出去的时候，根据 shardingKey 加锁就好
     private final ConcurrentHashMap<String, ConcurrentLinkedQueue<CachedMessage>> availableMessagesMap;
 
     // 不可用消息缓存：QueueKey -> ShardingKey -> 消息
@@ -199,12 +200,12 @@ public class ShardingKeyCache {
     /**
      * 添加暂时不可用的消息到缓存
      *
-     * @param topic       主题
-     * @param group       消费组
-     * @param queueId     队列ID
-     * @param shardingKey shardingKey
+     * @param topic         主题
+     * @param group         消费组
+     * @param queueId       队列ID
+     * @param shardingKey   shardingKey
      * @param messageResult 消息结果
-     * @param offsets     消息offset列表
+     * @param offsets       消息offset列表
      */
     public void addUnavailableMessage(String topic, String group, int queueId, String shardingKey,
         GetMessageResult messageResult, List<Long> offsets) {
@@ -217,8 +218,17 @@ public class ShardingKeyCache {
             unavailableMessagesMap.computeIfAbsent(queueKey, k -> new ConcurrentHashMap<>());
 
         // 一批相同 shardingKey 的消息创建一个 GetMessageResult
-        CachedMessage unavailableMessage = new CachedMessage(topic, group, queueId, shardingKey, messageResult, offsets);
-        shardingKeyMap.put(shardingKey, unavailableMessage);
+        shardingKeyMap.compute(shardingKey, (k, v) -> {
+            if (v == null) {
+                return new CachedMessage(topic, group, queueId, shardingKey, messageResult, offsets);
+            } else {
+                for (int i = 0; i < offsets.size(); i++) {
+                    v.getMessageResult().addMessage(messageResult.getMessageMapedList().get(i), offsets.get(i));
+                    v.getOffsets().addAll(offsets);
+                }
+                return v;
+            }
+        });
         totalCachedMessages.incrementAndGet();
 
         log.info("添加不可用消息批次到缓存: topic={}, group={}, queueId={}, shardingKey={}, 消息数量={}",
@@ -269,30 +279,33 @@ public class ShardingKeyCache {
         ConcurrentLinkedQueue<CachedMessage> queue = availableMessagesMap.get(queueKey);
 
         if (queue == null || queue.isEmpty()) {
+            log.info("可用消息缓存的 queue 为空: topic={}, group={}, queueId={}", topic, group, queueId);
             totalMisses.incrementAndGet();
             return new ArrayList<>();
         }
 
         List<CachedMessage> result = new ArrayList<>();
-        int count = 0;
+        result.add(queue.poll()); // 先只加一条
 
-        while (count < maxCount && !queue.isEmpty()) {
-            CachedMessage message = queue.poll();
-            if (message == null) {
-                break;
-            }
-
-//            // 检查消息是否过期
-//            if (message.isExpired(MAX_CACHE_TIME)) {
-//                totalCachedMessages.decrementAndGet();
-//                log.warn("移除过期缓存消息: {}", message);
-//                continue;
+//        int count = 0;
+//
+//        while (count < maxCount && !queue.isEmpty()) {
+//            CachedMessage message = queue.poll();
+//            if (message == null) {
+//                break;
 //            }
-
-            result.add(message);
-            totalCachedMessages.decrementAndGet();
-            count++;
-        }
+//
+////            // 检查消息是否过期
+////            if (message.isExpired(MAX_CACHE_TIME)) {
+////                totalCachedMessages.decrementAndGet();
+////                log.warn("移除过期缓存消息: {}", message);
+////                continue;
+////            }
+//
+//            result.add(message);
+//            totalCachedMessages.getAndAdd(-message.getOffsets().size());
+//            count += message.getOffsets().size();
+//        }
 
         if (!result.isEmpty()) {
             totalHits.incrementAndGet();
