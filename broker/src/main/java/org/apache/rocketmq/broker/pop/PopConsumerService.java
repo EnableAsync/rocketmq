@@ -326,11 +326,16 @@ public class PopConsumerService extends ServiceThread {
                 GetMessageResult cacheResult = getAvailableMessageResult(result.getAttemptId(), result.getPopTime(), result.getInvisibleTime(), groupId, topicId, queueId, batchSize);
                 if (cacheResult != null) {
                     brokerLogger.info("没有从 store 取消息，直接从 cache 中取消息, groupId={}, topicId={}, queueId={}, batchSize={}, offset={}",
-                        groupId, topicId, queueId, batchSize, cacheResult.getMaxOffset());
+                        groupId, topicId, queueId, batchSize, cacheResult.getMessageQueueOffset());
                     // 不走 store 读取消息，直接从 cache 中取消息
-                    return CompletableFuture.completedFuture(result)
-                        .thenApply(r -> handleGetMessageResult( // 更新位点
-                            result, cacheResult, topicId, queueId, retryType, cacheResult.getMaxOffset()));
+                    // 这里就不用再走 handleGetMessageResult 去预读和加锁了
+                    // getMinOffset
+                    result.addGetMessageResult(cacheResult, topicId, queueId, retryType, cacheResult.getMinOffset());
+                    brokerLogger.info("从 cache 中获取的 Result: {}", cacheResult);
+                    for (int i = 0;i < cacheResult.getMessageBufferList().size(); i++) {
+                        brokerLogger.info("从 cache 中获取的 Result 的 bytebuffer 的可读字节: {}", cacheResult.getMessageBufferList().get(i).remaining());
+                    }
+                    return CompletableFuture.completedFuture(result);
                 } else {
                     brokerLogger.info("从 store 取消息，cache 中没有消息, groupId={}, topicId={}, queueId={}, batchSize={}",
                         groupId, topicId, queueId, batchSize);

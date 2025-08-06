@@ -116,8 +116,8 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             GetMessageResult result = buildGetMessageResultAndCreateLocks(attemptId, popTime, invisibleTime,
                 topic, group, queueId, cachedMessages);
             if (result != null) {
-                log.info("从缓存中成功获取消息: topic={}, group={}, queueId={}, 消息批次数量={}, attemptId={}",
-                    topic, group, queueId, cachedMessages.size(), attemptId);
+                log.info("从缓存中成功获取消息: topic={}, group={}, queueId={}, 消息批次数量={}, attemptId={}, offsets={}",
+                    topic, group, queueId, result.getMessageCount(), attemptId, result.getMessageQueueOffset());
             }
             return result;
         } catch (Exception e) {
@@ -141,8 +141,9 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
         // 因为每个 CachedMessage 代表一批完整的消息，可以直接返回
         // 先不做 GetMessageResult 的合并
         GetMessageResult result = cachedMessages.get(0).getMessageResult();
+        result.setStatus(GetMessageStatus.FOUND);
 
-        log.debug("构建缓存消息结果并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}",
+        log.info("构建缓存消息结果并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}",
             topic, group, queueId, cachedMessages.size());
 
         return result;

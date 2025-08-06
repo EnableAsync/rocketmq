@@ -255,16 +255,15 @@ public class ShardingKeyLockManager {
                 cancelExpireTask(topic, group, queueId, shardingKeyHash);
 
                 boolean activated = cache.activateMessages(topic, group, queueId, shardingKeyHash);
+                log.info("释放了 shardingKey 的锁: {}", shardingKeyHash);
+                shardingKeyMap.remove(shardingKeyHash);
                 if (activated) {
                     // 激活成功后，唤醒长轮询
-                    notifyLongPolling(topic, group, queueId);
+                    notifyLongPolling(topic, group, -1);
                     log.info("消息ACK成功，激活ShardingKey缓存消息并且唤醒了长轮询: shardingKey={}, offset={}", shardingKeyHash, offset);
                 } else {
                     log.warn("消息ACK成功，激活ShardingKey缓存消息失败: shardingKey={}, offset={}", shardingKeyHash, offset);
                 }
-
-                log.info("释放了 shardingKey 的锁: {}", shardingKeyHash);
-                shardingKeyMap.remove(shardingKeyHash);
 
                 return true; // 返回 true 表示锁已完全释放
             }
@@ -403,37 +402,39 @@ public class ShardingKeyLockManager {
      * 处理过期锁
      */
     private void handleExpiredLock(String topic, String group, int queueId, String shardingKeyHash) {
-        String topicGroupKey = MessageShardingKeyUtil.buildTopicGroupIdentifier(topic, group);
-
-        ConcurrentHashMap<Integer, ConcurrentHashMap<String, ShardingKeyLock>> queueMap = shardingKeyLockMap.get(topicGroupKey);
-        if (queueMap == null) {
-            return;
-        }
-
-        ConcurrentHashMap<String, ShardingKeyLock> shardingKeyMap = queueMap.get(queueId);
-        if (shardingKeyMap == null) {
-            return;
-        }
-
-        ShardingKeyLock lock = shardingKeyMap.remove(shardingKeyHash);
-        if (lock != null) {
-            // 将过期的sharding key添加到可用缓存中
-            String cacheKey = MessageShardingKeyUtil.buildTopicGroupQueueIdentifier(topic, group, queueId);
-            Set<String> expiredSet = expiredShardingKeyCache.computeIfAbsent(
-                cacheKey, k -> ConcurrentHashMap.newKeySet());
-            expiredSet.add(shardingKeyHash);
-
-            // 移除所有offset映射
-            for (Long offset : lock.getOffsetSet()) {
-                removeOffsetToShardingKey(topicGroupKey, queueId, offset);
-            }
-
-            log.info("锁已经过期，释放了锁: {} in topic: {}, group: {}, queueId: {}, offsets: {}",
-                shardingKeyHash, topic, group, queueId, lock.getOffsetSet());
-
-            // 唤醒长轮询
-            notifyLongPolling(topic, group, queueId);
-        }
+        log.info("有锁过期，但是当前先不处理");
+        return;
+//        String topicGroupKey = MessageShardingKeyUtil.buildTopicGroupIdentifier(topic, group);
+//
+//        ConcurrentHashMap<Integer, ConcurrentHashMap<String, ShardingKeyLock>> queueMap = shardingKeyLockMap.get(topicGroupKey);
+//        if (queueMap == null) {
+//            return;
+//        }
+//
+//        ConcurrentHashMap<String, ShardingKeyLock> shardingKeyMap = queueMap.get(queueId);
+//        if (shardingKeyMap == null) {
+//            return;
+//        }
+//
+//        ShardingKeyLock lock = shardingKeyMap.remove(shardingKeyHash);
+//        if (lock != null) {
+//            // 将过期的sharding key添加到可用缓存中
+//            String cacheKey = MessageShardingKeyUtil.buildTopicGroupQueueIdentifier(topic, group, queueId);
+//            Set<String> expiredSet = expiredShardingKeyCache.computeIfAbsent(
+//                cacheKey, k -> ConcurrentHashMap.newKeySet());
+//            expiredSet.add(shardingKeyHash);
+//
+//            // 移除所有offset映射
+//            for (Long offset : lock.getOffsetSet()) {
+//                removeOffsetToShardingKey(topicGroupKey, queueId, offset);
+//            }
+//
+//            log.info("锁已经过期，释放了锁: {} in topic: {}, group: {}, queueId: {}, offsets: {}",
+//                shardingKeyHash, topic, group, queueId, lock.getOffsetSet());
+//
+//            // 唤醒长轮询
+//            notifyLongPolling(topic, group, -1);
+//        }
     }
 
     /**
@@ -581,6 +582,7 @@ public class ShardingKeyLockManager {
      */
     public long getMinInFlightOffset(String topic, String group, int queueId) {
         String topicGroupKey = MessageShardingKeyUtil.buildTopicGroupIdentifier(topic, group);
+        log.info("开始获取最小飞行中消息 offset: {}", topicGroupKey);
 
         // 从 offset 映射中获取所有飞行中的 offset
         ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> groupOffsetMaps = offsetToShardingKeyMap.get(topicGroupKey);
