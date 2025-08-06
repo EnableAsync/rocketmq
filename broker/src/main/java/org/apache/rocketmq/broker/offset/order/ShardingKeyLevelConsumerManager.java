@@ -95,7 +95,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
 
     @Override
     public GetMessageResult getAvailableMessageResult(String attemptId, long popTime, long invisibleTime,
-        String groupId, String topicId, int queueId, int batchSize) {
+        String topicId, String groupId, int queueId, int batchSize) {
         return popMessageFromCache(attemptId, popTime, invisibleTime, topicId, groupId, queueId, batchSize);
     }
 
