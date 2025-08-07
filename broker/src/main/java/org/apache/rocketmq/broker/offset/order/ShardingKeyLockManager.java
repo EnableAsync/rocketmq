@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.TimeUnit;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.common.ThreadFactoryImpl;
@@ -52,7 +53,7 @@ public class ShardingKeyLockManager {
      */
     private final ConcurrentHashMap<String/* topic@group */,
         ConcurrentHashMap<Integer/* queueId */,
-            ConcurrentHashMap<Long/* offset */, String/* shardingKeyHash */>>> offsetToShardingKeyMap;
+            ConcurrentSkipListMap<Long/* offset */, String/* shardingKeyHash */>>> offsetToShardingKeyMap;
 
     /**
      * attemptId集合，用于检查重复请求
@@ -348,7 +349,7 @@ public class ShardingKeyLockManager {
         }
 
         // 清除offset映射
-        ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> groupOffsetMap = offsetToShardingKeyMap.get(topicGroupKey);
+        ConcurrentHashMap<Integer, ConcurrentSkipListMap<Long, String>> groupOffsetMap = offsetToShardingKeyMap.get(topicGroupKey);
         if (groupOffsetMap != null) {
             groupOffsetMap.remove(queueId);
         }
@@ -451,11 +452,11 @@ public class ShardingKeyLockManager {
      */
     private void updateOffsetShardingKeyMapping(String topicGroupKey, int queueId, long offset,
         String shardingKeyHash) {
-        ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> groupOffsetMaps =
+        ConcurrentHashMap<Integer, ConcurrentSkipListMap<Long, String>> groupOffsetMaps =
             offsetToShardingKeyMap.computeIfAbsent(topicGroupKey, k -> new ConcurrentHashMap<>());
 
-        ConcurrentHashMap<Long, String> queueOffsetMap =
-            groupOffsetMaps.computeIfAbsent(queueId, k -> new ConcurrentHashMap<>());
+        ConcurrentSkipListMap<Long, String> queueOffsetMap =
+            groupOffsetMaps.computeIfAbsent(queueId, k -> new ConcurrentSkipListMap<>());
 
         queueOffsetMap.put(offset, shardingKeyHash);
     }
@@ -464,9 +465,9 @@ public class ShardingKeyLockManager {
      * 移除offset到sharding key的映射
      */
     private void removeOffsetToShardingKey(String topicGroupKey, int queueId, long offset) {
-        ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> groupOffsetMaps = offsetToShardingKeyMap.get(topicGroupKey);
+        ConcurrentHashMap<Integer, ConcurrentSkipListMap<Long, String>> groupOffsetMaps = offsetToShardingKeyMap.get(topicGroupKey);
         if (groupOffsetMaps != null) {
-            ConcurrentHashMap<Long, String> queueOffsetMap = groupOffsetMaps.get(queueId);
+            ConcurrentSkipListMap<Long, String> queueOffsetMap = groupOffsetMaps.get(queueId);
             if (queueOffsetMap != null) {
                 queueOffsetMap.remove(offset);
             }
@@ -477,12 +478,12 @@ public class ShardingKeyLockManager {
      * 查找offset对应的sharding key
      */
     private String findShardingKeyByOffset(String topicGroupKey, int queueId, long offset) {
-        ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> groupOffsetMaps = offsetToShardingKeyMap.get(topicGroupKey);
+        ConcurrentHashMap<Integer, ConcurrentSkipListMap<Long, String>> groupOffsetMaps = offsetToShardingKeyMap.get(topicGroupKey);
         if (groupOffsetMaps == null) {
             return null;
         }
 
-        ConcurrentHashMap<Long, String> queueOffsetMap = groupOffsetMaps.get(queueId);
+        ConcurrentSkipListMap<Long, String> queueOffsetMap = groupOffsetMaps.get(queueId);
         if (queueOffsetMap == null) {
             return null;
         }
@@ -595,12 +596,12 @@ public class ShardingKeyLockManager {
         log.info("开始获取最小飞行中消息 offset: {}", topicGroupKey);
 
         // 从 offset 映射中获取所有飞行中的 offset
-        ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> groupOffsetMaps = offsetToShardingKeyMap.get(topicGroupKey);
+        ConcurrentHashMap<Integer, ConcurrentSkipListMap<Long, String>> groupOffsetMaps = offsetToShardingKeyMap.get(topicGroupKey);
         if (groupOffsetMaps == null) {
             return -1L; // 没有飞行中的消息
         }
 
-        ConcurrentHashMap<Long, String> queueOffsetMap = groupOffsetMaps.get(queueId);
+        ConcurrentSkipListMap<Long, String> queueOffsetMap = groupOffsetMaps.get(queueId);
         if (queueOffsetMap == null || queueOffsetMap.isEmpty()) {
             return -1L; // 没有飞行中的消息
         }
@@ -608,10 +609,14 @@ public class ShardingKeyLockManager {
         // 找到最小的 offset
         // TODO: 用 treemap 优化
         long minOffset = Long.MAX_VALUE;
-        for (Long offset : queueOffsetMap.keySet()) {
-            if (offset < minOffset) {
-                minOffset = offset;
-            }
+//        for (Long offset : queueOffsetMap.keySet()) {
+//            if (offset < minOffset) {
+//                minOffset = offset;
+//            }
+//        }
+        Map.Entry<Long, String> entry = queueOffsetMap.firstEntry();
+        if (entry != null) {
+            minOffset = entry.getKey();
         }
 
         return minOffset == Long.MAX_VALUE ? -1L : minOffset;
@@ -623,12 +628,12 @@ public class ShardingKeyLockManager {
     public int getInFlightMessageCount(String topic, String group, int queueId) {
         String topicGroupKey = MessageShardingKeyUtil.buildTopicGroupIdentifier(topic, group);
 
-        ConcurrentHashMap<Integer, ConcurrentHashMap<Long, String>> groupOffsetMaps = offsetToShardingKeyMap.get(topicGroupKey);
+        ConcurrentHashMap<Integer, ConcurrentSkipListMap<Long, String>> groupOffsetMaps = offsetToShardingKeyMap.get(topicGroupKey);
         if (groupOffsetMaps == null) {
             return 0;
         }
 
-        ConcurrentHashMap<Long, String> queueOffsetMap = groupOffsetMaps.get(queueId);
+        ConcurrentSkipListMap<Long, String> queueOffsetMap = groupOffsetMaps.get(queueId);
         if (queueOffsetMap == null) {
             return 0;
         }

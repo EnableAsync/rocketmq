@@ -438,6 +438,8 @@ public class AckMessageProcessor implements NettyRequestProcessor {
         long oldOffset = consumerOffsetManager.queryOffset(consumeGroup, topic, qId);
         if (ackOffset < oldOffset) {
             log.warn("ack 错误，ack offset < old offset, ackOffset:{}, oldOffset:{}", ackOffset, oldOffset);
+            log.info("ack 错误但是唤醒长轮询");
+            this.brokerController.getPopMessageProcessor().notifyMessageArriving(topic, -1, consumeGroup);
             return;
         }
 
