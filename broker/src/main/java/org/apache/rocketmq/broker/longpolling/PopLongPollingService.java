@@ -198,6 +198,7 @@ public class PopLongPollingService extends ServiceThread {
         Long tagsCode, long msgStoreTime, byte[] filterBitMap, Map<String, String> properties, CommandCallback callback) {
         ConcurrentSkipListSet<PopRequest> remotingCommands = pollingMap.get(KeyBuilder.buildPollingKey(topic, cid, queueId));
         if (remotingCommands == null || remotingCommands.isEmpty()) {
+            log.info("notifyMessageArriving 中 remotingCommands 为空，唤醒失败，key={}", KeyBuilder.buildPollingKey(topic, cid, queueId));
             return false;
         }
 
@@ -231,6 +232,7 @@ public class PopLongPollingService extends ServiceThread {
     }
 
     public boolean wakeUp(final PopRequest request, CommandCallback callback) {
+        log.info("wakeUp reqId={}", request.getRemotingCommand().getOpaque());
         if (request == null || !request.complete()) {
             return false;
         }
@@ -311,6 +313,7 @@ public class PopLongPollingService extends ServiceThread {
         }
         String key = KeyBuilder.buildPollingKey(requestHeader.getTopic(), requestHeader.getConsumerGroup(),
             requestHeader.getQueueId());
+        log.info("polling 方法挂起长轮询，key={}", key);
         ConcurrentSkipListSet<PopRequest> queue = pollingMap.get(key);
         if (queue == null) {
             queue = new ConcurrentSkipListSet<>(PopRequest.COMPARATOR);

@@ -218,21 +218,30 @@ public class ShardingKeyLockManager {
         if (shardingKeyHash == null) {
             log.warn("Cannot find sharding key for offset: {} in topic: {}, group: {}, queueId: {}",
                 offset, topic, group, queueId);
+
+            notifyLongPolling(topic, group, -1);
+            log.info("没有 offset 到 shardingKey 的映射，唤醒长轮询", shardingKeyHash, offset);
             return false;
         }
 
         ConcurrentHashMap<Integer, ConcurrentHashMap<String, ShardingKeyLock>> queueMap = shardingKeyLockMap.get(topicGroupKey);
         if (queueMap == null) {
+            notifyLongPolling(topic, group, -1);
+            log.info("没有订阅关系上的锁，唤醒长轮询", shardingKeyHash, offset);
             return false;
         }
 
         ConcurrentHashMap<String, ShardingKeyLock> shardingKeyMap = queueMap.get(queueId);
         if (shardingKeyMap == null) {
+            notifyLongPolling(topic, group, -1);
+            log.info("没有 queue 上的锁，唤醒长轮询", shardingKeyHash, offset);
             return false;
         }
 
         ShardingKeyLock lock = shardingKeyMap.get(shardingKeyHash);
         if (lock == null) {
+            notifyLongPolling(topic, group, -1);
+            log.info("没有 shardingKey 上的锁，唤醒长轮询", shardingKeyHash, offset);
             return false;
         }
 
@@ -493,6 +502,7 @@ public class ShardingKeyLockManager {
      */
     private void notifyLongPolling(String topic, String group, int queueId) {
         if (brokerController != null && brokerController.getPopMessageProcessor() != null) {
+            log.info("从锁中唤醒长轮询: topic: {}, group: {}, queueId: {}", topic, group, queueId);
             brokerController.getPopMessageProcessor().notifyMessageArriving(topic, queueId, group);
         }
     }
@@ -596,6 +606,7 @@ public class ShardingKeyLockManager {
         }
 
         // 找到最小的 offset
+        // TODO: 用 treemap 优化
         long minOffset = Long.MAX_VALUE;
         for (Long offset : queueOffsetMap.keySet()) {
             if (offset < minOffset) {

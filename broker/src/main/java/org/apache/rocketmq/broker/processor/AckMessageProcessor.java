@@ -465,6 +465,7 @@ public class AckMessageProcessor implements NettyRequestProcessor {
                     consumerOffsetManager.commitOffset(remoteAddress, consumeGroup, topic, qId, nextOffset);
                 }
                 if (!FIFOConsumptionManager.checkBlock(null, topic, consumeGroup, qId, invisibleTime)) {
+                    log.info("ackOrderlyNew 唤醒长轮询，ackOffset:{}, nextOffset:{}", ackOffset, nextOffset);
                     this.brokerController.getPopMessageProcessor().notifyMessageArriving(topic, qId, consumeGroup);
                 }
                 return;

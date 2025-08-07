@@ -220,7 +220,7 @@ public class PopMessageProcessor implements NettyRequestProcessor {
     @Override
     public RemotingCommand processRequest(final ChannelHandlerContext ctx, RemotingCommand request)
         throws RemotingCommandException {
-        log.info("收到了 pop 请求");
+        log.info("收到了 pop 请求: reqId={}", request.getOpaque());
 
         final long beginTimeMills = this.brokerController.getMessageStore().now();
 
@@ -392,6 +392,7 @@ public class PopMessageProcessor implements NettyRequestProcessor {
                 if (result.isFound()) {
                     response.setCode(ResponseCode.SUCCESS);
                     getMessageResult.setStatus(GetMessageStatus.FOUND);
+                    log.info("pop 请求找到消息，不挂起请求, popTime={}, restCount={}", result.getPopTime(), result.getRestCount());
                     // recursive processing
                     if (result.getRestCount() > 0) {
                         log.info("Found 的情况下长轮询唤醒成功，RestCount={}", result.getRestCount());
@@ -407,6 +408,7 @@ public class PopMessageProcessor implements NettyRequestProcessor {
                         ctx, request, new PollingHeader(requestHeader), finalSubscriptionData, finalMessageFilter);
 
                     if (PollingResult.POLLING_SUC == pollingResult) {
+                        log.info("polling 成功挂起了长轮询");
                         // recursive processing
                         if (result.getRestCount() > 0) {
                             log.info("非 Found 情况下长轮询唤醒成功，RestCount={}", result.getRestCount());

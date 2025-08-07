@@ -323,6 +323,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             boolean fullyReleased = lockManager.releaseLock(topic, group, queueId, queueOffset, popTime);
 
             // 返回当前未被 ack 的最小 offset
+            // TODO: 当乱序 ack 的时候，现在删掉了 offset -> shardingKey 的映射，这里可以返回当前 offset -> shardingKey 的最小 offset
             long minInFlightOffset = lockManager.getMinInFlightOffset(topic, group, queueId);
             if (minInFlightOffset == -1L) {
                 // 没有飞行中的消息，返回当前 offset + 1 作为下一个消费位点

@@ -323,30 +323,35 @@ public class PopConsumerService extends ServiceThread {
                     // should not add accumulation(max offset - consumer offset) here
                     return CompletableFuture.completedFuture(result);
                 }
-                GetMessageResult cacheResult = getAvailableMessageResult(result.getAttemptId(), result.getPopTime(), result.getInvisibleTime(), groupId, topicId, queueId, batchSize);
-                if (cacheResult != null) {
-                    brokerLogger.info("没有从 store 取消息，直接从 cache 中取消息, groupId={}, topicId={}, queueId={}, batchSize={}, offset={}",
-                        groupId, topicId, queueId, batchSize, cacheResult.getMessageQueueOffset());
-                    // 不走 store 读取消息，直接从 cache 中取消息
-                    // 这里就不用再走 handleGetMessageResult 去预读和加锁了
-                    // getMinOffset
-                    result.addGetMessageResult(cacheResult, topicId, queueId, retryType, cacheResult.getMinOffset());
-                    brokerLogger.info("从 cache 中获取的 Result: {}", cacheResult);
-                    for (int i = 0;i < cacheResult.getMessageBufferList().size(); i++) {
-                        brokerLogger.info("从 cache 中获取的 Result 的 bytebuffer 的可读字节: {}", cacheResult.getMessageBufferList().get(i).remaining());
-                    }
-                    return CompletableFuture.completedFuture(result);
-                } else {
-                    brokerLogger.info("从 store 取消息，cache 中没有消息, groupId={}, topicId={}, queueId={}, batchSize={}",
-                        groupId, topicId, queueId, batchSize);
-                }
             }
 
+            // TODO: 什么作用呢？
             int remain = batchSize - result.getMessageCount();
             if (remain <= 0) {
                 result.addRestCount(this.getPendingFilterCount(groupId, topicId, queueId));
                 return CompletableFuture.completedFuture(result);
             } else {
+                if (result.isFifo()) {
+
+                    GetMessageResult cacheResult = getAvailableMessageResult(result.getAttemptId(), result.getPopTime(), result.getInvisibleTime(), groupId, topicId, queueId, batchSize);
+                    if (cacheResult != null) {
+                        brokerLogger.info("没有从 store 取消息，直接从 cache 中取消息, groupId={}, topicId={}, queueId={}, batchSize={}, offset={}",
+                            groupId, topicId, queueId, batchSize, cacheResult.getMessageQueueOffset());
+                        // 不走 store 读取消息，直接从 cache 中取消息
+                        // 这里就不用再走 handleGetMessageResult 去预读和加锁了
+                        // getMinOffset
+                        final long consumeOffset = this.getPopOffset(groupId, topicId, queueId, result.getInitMode());
+                        result.addGetMessageResult(cacheResult, topicId, queueId, retryType, consumeOffset);
+                        brokerLogger.info("从 cache 中获取的 Result: {}", cacheResult);
+                        for (int i = 0;i < cacheResult.getMessageBufferList().size(); i++) {
+                            brokerLogger.info("从 cache 中获取的 Result 的 bytebuffer 的可读字节: {}", cacheResult.getMessageBufferList().get(i).remaining());
+                        }
+                        return CompletableFuture.completedFuture(result);
+                    } else {
+                        brokerLogger.info("从 store 取消息，cache 中没有消息, groupId={}, topicId={}, queueId={}, batchSize={}",
+                            groupId, topicId, queueId, batchSize);
+                    }
+                }
                 final long consumeOffset = this.getPopOffset(groupId, topicId, queueId, result.getInitMode());
                 return getMessageAsync(clientHost, groupId, topicId, queueId, consumeOffset, remain, filter)
                     .thenApply(getMessageResult -> handleGetMessageResult(
@@ -364,6 +369,7 @@ public class PopConsumerService extends ServiceThread {
 
         TopicConfig topicConfig = brokerController.getTopicConfigManager().selectTopicConfig(topicId);
         if (topicConfig == null || !consumerLockService.tryLock(groupId, topicId)) {
+            log.info("pop 请求没有拿到锁，直接返回了");
             return CompletableFuture.completedFuture(popConsumerContext);
         }
 
