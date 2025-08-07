@@ -260,7 +260,9 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
 
         try {
             GetMessageResult result = new GetMessageResult();
-
+            result.setMaxOffset(originalResult.getMaxOffset());
+            result.setMinOffset(originalResult.getMinOffset());
+            result.setNextBeginOffset(originalResult.getNextBeginOffset());
             for (Integer index : indices) {
                 result.addMessage(originalResult.getMessageMapedList().get(index), originalResult.getMessageQueueOffset().get(index));
             }

@@ -28,7 +28,11 @@ public class GetMessageResult {
     private final List<Long> messageQueueOffset;
 
     private GetMessageStatus status;
+
+    // 过滤的情况，用于跳过 filter 中被过滤掉的消息
+    // 也可以用 pull offset 实现这个功能
     private long nextBeginOffset;
+    // 整个 cq 的，用于客户端修复数据
     private long minOffset;
     private long maxOffset;
 

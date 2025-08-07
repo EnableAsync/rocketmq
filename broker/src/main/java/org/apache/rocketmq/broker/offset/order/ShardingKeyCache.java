@@ -62,7 +62,7 @@ public class ShardingKeyCache {
             this.queueId = queueId;
             this.shardingKey = shardingKey;
             this.messageResult = messageResult;
-            this.offsets = new ArrayList<>(offsets); // 防止外部修改
+            this.offsets = new ArrayList<>(offsets);
             this.createTime = System.currentTimeMillis();
         }
 
@@ -225,6 +225,9 @@ public class ShardingKeyCache {
                 for (int i = 0; i < offsets.size(); i++) {
                     // TODO: 一直加可能会超
                     v.getMessageResult().addMessage(messageResult.getMessageMapedList().get(i), offsets.get(i));
+                    v.getMessageResult().setMaxOffset(messageResult.getMaxOffset());
+                    v.getMessageResult().setMinOffset(messageResult.getMinOffset());
+                    v.getMessageResult().setNextBeginOffset(messageResult.getNextBeginOffset());
                     v.getOffsets().addAll(offsets);
                 }
                 return v;
