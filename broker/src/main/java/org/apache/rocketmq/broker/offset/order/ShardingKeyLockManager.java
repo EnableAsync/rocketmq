@@ -220,30 +220,29 @@ public class ShardingKeyLockManager {
         if (shardingKeyHash == null) {
             log.warn("Cannot find sharding key for offset: {} in topic: {}, group: {}, queueId: {}",
                 offset, topic, group, queueId);
-
-            notifyLongPolling(topic, group, ALL_QUEUES);
-            log.info("没有 offset 到 shardingKey 的映射，唤醒长轮询", shardingKeyHash, offset);
+//            notifyLongPolling(topic, group, ALL_QUEUES);
+            log.info("没有 offset 到 shardingKey 的映射，不唤醒长轮询，在 ackOrderlyNew 中唤醒", shardingKeyHash, offset);
             return false;
         }
 
         ConcurrentHashMap<Integer, ConcurrentHashMap<String, ShardingKeyLock>> queueMap = shardingKeyLockMap.get(topicGroupKey);
         if (queueMap == null) {
-            notifyLongPolling(topic, group, ALL_QUEUES);
-            log.info("没有订阅关系上的锁，唤醒长轮询", shardingKeyHash, offset);
+//            notifyLongPolling(topic, group, ALL_QUEUES);
+            log.info("没有订阅关系上的锁，不唤醒长轮询，在 ackOrderlyNew 中唤醒", shardingKeyHash, offset);
             return false;
         }
 
         ConcurrentHashMap<String, ShardingKeyLock> shardingKeyMap = queueMap.get(queueId);
         if (shardingKeyMap == null) {
             notifyLongPolling(topic, group, ALL_QUEUES);
-            log.info("没有 queue 上的锁，唤醒长轮询", shardingKeyHash, offset);
+            log.info("没有 queue 上的锁，不唤醒长轮询，在 ackOrderlyNew 中唤醒", shardingKeyHash, offset);
             return false;
         }
 
         ShardingKeyLock lock = shardingKeyMap.get(shardingKeyHash);
         if (lock == null) {
             notifyLongPolling(topic, group, ALL_QUEUES);
-            log.info("没有 shardingKey 上的锁，唤醒长轮询", shardingKeyHash, offset);
+            log.info("没有 shardingKey 上的锁，不唤醒长轮询，在 ackOrderlyNew 中唤醒", shardingKeyHash, offset);
             return false;
         }
 
@@ -269,9 +268,9 @@ public class ShardingKeyLockManager {
                 log.info("释放了 shardingKey 的锁: {}", shardingKeyHash);
                 shardingKeyMap.remove(shardingKeyHash);
                 if (activated) {
-                    // 激活成功后，唤醒长轮询
-                    notifyLongPolling(topic, group, ALL_QUEUES);
-                    log.info("消息ACK成功，激活ShardingKey缓存消息并且唤醒了长轮询: shardingKey={}, offset={}", shardingKeyHash, offset);
+                    // 激活成功后，确保有新消息，唤醒长轮询
+//                    notifyLongPolling(topic, group, ALL_QUEUES);
+                    log.info("消息ACK成功，激活ShardingKey缓存消息但是不唤醒长轮询，更新完 offset 在 ackOrderlyNew 中唤醒: shardingKey={}, offset={}", shardingKeyHash, offset);
                 } else {
                     log.warn("消息ACK成功，激活ShardingKey缓存消息失败: shardingKey={}, offset={}", shardingKeyHash, offset);
                 }
@@ -280,7 +279,7 @@ public class ShardingKeyLockManager {
             }
         }
 
-        return false; // 返回 false 表示锁内还有其他 offset
+        return removed; // 表示有没有被 ack 成功
     }
 
     /**
@@ -592,35 +591,32 @@ public class ShardingKeyLockManager {
      * 获取指定队列中所有飞行中消息的最小 offset
      * 用于 commitAndNext 返回正确的消费位点
      */
-    public long getMinInFlightOffset(String topic, String group, int queueId) {
+    public long getMinInFlightOffset(String topic, String group, int queueId, long queueOffset) {
         String topicGroupKey = MessageShardingKeyUtil.buildTopicGroupIdentifier(topic, group);
         log.info("开始获取最小飞行中消息 offset: {}", topicGroupKey);
 
         // 从 offset 映射中获取所有飞行中的 offset
         ConcurrentHashMap<Integer, ConcurrentSkipListMap<Long, String>> groupOffsetMaps = offsetToShardingKeyMap.get(topicGroupKey);
         if (groupOffsetMaps == null) {
-            return -1L; // 没有飞行中的消息
+            log.info("所有消息已确认，返回下一个消费位点: {}", queueOffset + 1);
+            return queueOffset + 1; // 没有飞行中的消息
+//            return -1;
         }
 
         ConcurrentSkipListMap<Long, String> queueOffsetMap = groupOffsetMaps.get(queueId);
-        if (queueOffsetMap == null || queueOffsetMap.isEmpty()) {
-            return -1L; // 没有飞行中的消息
+        if (queueOffsetMap == null) {
+            log.info("所有消息已确认，返回下一个消费位点: {}", queueOffset + 1);
+            return queueOffset + 1; // 没有飞行中的消息
         }
 
-        // 找到最小的 offset
-        // TODO: 用 treemap 优化
-        long minOffset = Long.MAX_VALUE;
-//        for (Long offset : queueOffsetMap.keySet()) {
-//            if (offset < minOffset) {
-//                minOffset = offset;
-//            }
-//        }
+        // 要确保给出去的消息的 offset 都存了 shardingKey
         Map.Entry<Long, String> entry = queueOffsetMap.firstEntry();
         if (entry != null) {
-            minOffset = entry.getKey();
+            log.info("返回当前未被ACK的最小offset: {}", entry.getKey());
+            return entry.getKey();
+        } else {
+            return -3; // 返回 -3 表示当前 offset 被确认，然后没有其他消息可以被消费了，这个时候提交 pull offset
         }
-
-        return minOffset == Long.MAX_VALUE ? -1L : minOffset;
     }
 
     /**

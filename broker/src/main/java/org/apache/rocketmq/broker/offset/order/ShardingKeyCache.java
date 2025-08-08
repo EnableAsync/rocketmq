@@ -266,9 +266,7 @@ public class ShardingKeyCache {
         }
 
         // 将整个消息批次移动到可用队列
-//        ConcurrentLinkedQueue<CachedMessage> availableQueue =
         availableMessagesMap.computeIfAbsent(queueKey, k -> new ConcurrentLinkedQueue<>()).offer(cachedMessage);
-//        availableQueue.offer(cachedMessage);
 
         log.info("激活消息批次成功: topic={}, group={}, queueId={}, shardingKey={}, 激活消息数量={}, 缓存状态为={}",
             topic, group, queueId, shardingKey, cachedMessage.getOffsets().size(), availableMessagesMap);

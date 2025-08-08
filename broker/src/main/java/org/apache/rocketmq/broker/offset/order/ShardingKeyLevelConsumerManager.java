@@ -146,6 +146,10 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
         log.info("构建缓存消息结果并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}",
             topic, group, queueId, cachedMessages.size());
 
+        // 给出去的消息要加锁
+        lockManager.createOrUpdateLock(topic, group, queueId, cachedMessages.get(0).getShardingKey(),
+            popTime, invisibleTime, attemptId, cachedMessages.get(0).getOffsets());
+
         return result;
     }
 
@@ -320,19 +324,15 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     public long commitAndNext(String topic, String group, int queueId, long queueOffset, long popTime) {
         try {
             // 根据 offset 释放对应的 sharding key 锁
-            boolean fullyReleased = lockManager.releaseLock(topic, group, queueId, queueOffset, popTime);
+            boolean isAcked = lockManager.releaseLock(topic, group, queueId, queueOffset, popTime);
 
-            // 返回当前未被 ack 的最小 offset
-            // TODO: 当乱序 ack 的时候，现在删掉了 offset -> shardingKey 的映射，这里可以返回当前 offset -> shardingKey 的最小 offset
-            long minInFlightOffset = lockManager.getMinInFlightOffset(topic, group, queueId);
-            if (minInFlightOffset == -1L) {
-                // 没有飞行中的消息，返回当前 offset + 1 作为下一个消费位点
-                log.info("所有消息已确认，返回下一个消费位点: {}", queueOffset + 1);
-                return queueOffset + 1;
+            if (isAcked) {
+                // ack 成功才提位点
+                // 在 releaseLock 中已经删除了当前要确认的 ack
+                // 于是这里返回当前未被 ack 的最小 offset
+                return lockManager.getMinInFlightOffset(topic, group, queueId, queueOffset);
             } else {
-                // 返回当前未被 ack 的最小 offset
-                log.debug("返回当前未被ACK的最小offset: {}", minInFlightOffset);
-                return minInFlightOffset;
+                return -1;
             }
         } catch (Exception e) {
             log.error("消息确认失败: offset={}, topic={}, group={}, queueId={}",
@@ -507,21 +507,6 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             log.error("Failed to load ShardingKeyLevelConsumerManager state", e);
             return false;
         }
-    }
-
-    /**
-     * 构建顺序信息
-     */
-    private void buildOrderInfo(StringBuilder orderInfoBuilder, String topic, String group, int queueId,
-        String shardingKey, List<MessageShardingKeyUtil.MessageInfo> messages) {
-        // 为每个消息构建顺序信息
-        for (MessageShardingKeyUtil.MessageInfo messageInfo : messages) {
-            ExtraInfoUtil.buildQueueOffsetOrderCountInfo(orderInfoBuilder, topic, queueId,
-                messageInfo.getOffset(), 0);
-        }
-
-        // 构建 shardingKey 级别的顺序信息
-        ExtraInfoUtil.buildQueueIdOrderCountInfo(orderInfoBuilder, topic, queueId, 0);
     }
 
     // Getter methods for testing and monitoring

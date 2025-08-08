@@ -458,7 +458,7 @@ public class AckMessageProcessor implements NettyRequestProcessor {
             log.info("顺序消息 ack 完成，ackOffset:{}, nextOffset:{}", ackOffset, nextOffset);
             if (brokerController.getBrokerConfig().isPopConsumerKVServiceLog()) {
                 log.info("PopConsumerService ack orderly, time={}, topicId={}, groupId={}, queueId={}, " +
-                        "offset={}, next={}", popTime, topic, consumeGroup, qId, ackOffset, nextOffset);
+                    "offset={}, next={}", popTime, topic, consumeGroup, qId, ackOffset, nextOffset);
             }
 
             if (nextOffset > -1L) {
@@ -467,18 +467,23 @@ public class AckMessageProcessor implements NettyRequestProcessor {
                     consumerOffsetManager.commitOffset(remoteAddress, consumeGroup, topic, qId, nextOffset);
                 }
                 if (!FIFOConsumptionManager.checkBlock(null, topic, consumeGroup, qId, invisibleTime)) {
-                    log.info("ackOrderlyNew 唤醒长轮询，ackOffset:{}, nextOffset:{}", ackOffset, nextOffset);
+                    log.info("ackOrderlyNew 唤醒长轮询，ackOffset:{}, nextOffset:{}, queueId:{}", ackOffset, nextOffset, qId);
                     this.brokerController.getPopMessageProcessor().notifyMessageArriving(topic, qId, consumeGroup);
+                    log.info("在 ackOrderlyNew 中唤醒所有 queue 的长轮询");
+                    this.brokerController.getPopMessageProcessor().notifyMessageArriving(topic, -1, consumeGroup);
                 }
-                return;
-            }
-
-            if (nextOffset == -1) {
+            } else if (nextOffset == -1) {
                 String errorInfo = String.format("offset is illegal, key:%s %s %s, old:%d, commit:%d, next:%d, %s",
                     consumeGroup, topic, qId, oldOffset, ackOffset, nextOffset, channel.remoteAddress());
                 POP_LOGGER.warn(errorInfo);
                 response.setCode(ResponseCode.MESSAGE_ILLEGAL);
                 response.setRemark(errorInfo);
+            } else if (nextOffset == -3) {
+                // 返回 -3 表示当前 offset 被确认，然后没有其他消息可以被消费了，这个时候提交 pull offset
+                if (!consumerOffsetManager.hasOffsetReset(topic, consumeGroup, qId)) {
+                    String remoteAddress = RemotingHelper.parseSocketAddressAddr(channel.remoteAddress());
+                    consumerOffsetManager.commitOffset(remoteAddress, consumeGroup, topic, qId, consumerOffsetManager.queryPullOffset(consumeGroup, topic, qId));
+                }
             }
         } finally {
             consumerLockService.unlock(consumeGroup, topic);
