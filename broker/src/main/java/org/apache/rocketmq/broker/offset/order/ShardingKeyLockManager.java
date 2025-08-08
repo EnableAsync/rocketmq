@@ -39,6 +39,7 @@ import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
 public class ShardingKeyLockManager {
 
     private static final Logger log = LoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
+    public static final int ALL_QUEUES = -1;
 
     /**
      * 主锁存储结构：topic@group -> queueId -> shardingKeyHash -> ShardingKeyLock
@@ -220,28 +221,28 @@ public class ShardingKeyLockManager {
             log.warn("Cannot find sharding key for offset: {} in topic: {}, group: {}, queueId: {}",
                 offset, topic, group, queueId);
 
-            notifyLongPolling(topic, group, -1);
+            notifyLongPolling(topic, group, ALL_QUEUES);
             log.info("没有 offset 到 shardingKey 的映射，唤醒长轮询", shardingKeyHash, offset);
             return false;
         }
 
         ConcurrentHashMap<Integer, ConcurrentHashMap<String, ShardingKeyLock>> queueMap = shardingKeyLockMap.get(topicGroupKey);
         if (queueMap == null) {
-            notifyLongPolling(topic, group, -1);
+            notifyLongPolling(topic, group, ALL_QUEUES);
             log.info("没有订阅关系上的锁，唤醒长轮询", shardingKeyHash, offset);
             return false;
         }
 
         ConcurrentHashMap<String, ShardingKeyLock> shardingKeyMap = queueMap.get(queueId);
         if (shardingKeyMap == null) {
-            notifyLongPolling(topic, group, -1);
+            notifyLongPolling(topic, group, ALL_QUEUES);
             log.info("没有 queue 上的锁，唤醒长轮询", shardingKeyHash, offset);
             return false;
         }
 
         ShardingKeyLock lock = shardingKeyMap.get(shardingKeyHash);
         if (lock == null) {
-            notifyLongPolling(topic, group, -1);
+            notifyLongPolling(topic, group, ALL_QUEUES);
             log.info("没有 shardingKey 上的锁，唤醒长轮询", shardingKeyHash, offset);
             return false;
         }
@@ -269,7 +270,7 @@ public class ShardingKeyLockManager {
                 shardingKeyMap.remove(shardingKeyHash);
                 if (activated) {
                     // 激活成功后，唤醒长轮询
-                    notifyLongPolling(topic, group, -1);
+                    notifyLongPolling(topic, group, ALL_QUEUES);
                     log.info("消息ACK成功，激活ShardingKey缓存消息并且唤醒了长轮询: shardingKey={}, offset={}", shardingKeyHash, offset);
                 } else {
                     log.warn("消息ACK成功，激活ShardingKey缓存消息失败: shardingKey={}, offset={}", shardingKeyHash, offset);
