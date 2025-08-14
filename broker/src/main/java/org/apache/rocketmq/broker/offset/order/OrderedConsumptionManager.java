@@ -123,5 +123,5 @@ public interface OrderedConsumptionManager {
      * 用于从缓存中获取消息
      */
     GetMessageResult getAvailableMessageResult(String attemptId, long popTime, long invisibleTime, String groupId,
-        String topicId, int queueId, int batchSize);
+        String topicId, int queueId, int batchSize, StringBuilder orderCountInfoBuilder);
 }

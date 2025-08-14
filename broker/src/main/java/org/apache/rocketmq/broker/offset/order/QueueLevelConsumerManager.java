@@ -377,7 +377,7 @@ public class QueueLevelConsumerManager extends ConfigManager implements OrderedC
 
     @Override
     public GetMessageResult getAvailableMessageResult(String attemptId, long popTime, long invisibleTime,
-        String groupId, String topicId, int queueId, int batchSize) {
+        String groupId, String topicId, int queueId, int batchSize, StringBuilder orderCountInfoBuilder) {
         return null;
     }
 

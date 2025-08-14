@@ -296,8 +296,8 @@ public class PopConsumerService extends ServiceThread {
     }
 
     public GetMessageResult getAvailableMessageResult(String attemptId, long popTime, long invisibleTime,
-        String groupId, String topicId, int queueId, int batchSize) {
-        return brokerController.getConsumerOrderInfoManager().getAvailableMessageResult(attemptId, popTime, invisibleTime, topicId, groupId, queueId, batchSize);
+        String groupId, String topicId, int queueId, int batchSize, StringBuilder orderCountInfoBuilder) {
+        return brokerController.getConsumerOrderInfoManager().getAvailableMessageResult(attemptId, popTime, invisibleTime, topicId, groupId, queueId, batchSize, orderCountInfoBuilder);
     }
 
     protected CompletableFuture<PopConsumerContext> getMessageAsync(CompletableFuture<PopConsumerContext> future,
@@ -332,7 +332,7 @@ public class PopConsumerService extends ServiceThread {
                 return CompletableFuture.completedFuture(result);
             } else {
                 if (result.isFifo()) {
-                    GetMessageResult cacheResult = getAvailableMessageResult(result.getAttemptId(), result.getPopTime(), result.getInvisibleTime(), groupId, topicId, queueId, batchSize);
+                    GetMessageResult cacheResult = getAvailableMessageResult(result.getAttemptId(), result.getPopTime(), result.getInvisibleTime(), groupId, topicId, queueId, batchSize, result.getOrderCountInfoBuilder());
                     if (cacheResult != null) { // 确保 GetMessageResult 拿到的消息是有消息体的
                         brokerLogger.info("尝试直接从 cache 中取消息, groupId={}, topicId={}, queueId={}, batchSize={}, offset={}",
                             groupId, topicId, queueId, batchSize, cacheResult.getMessageQueueOffset());

@@ -34,7 +34,6 @@ import org.apache.rocketmq.logging.org.slf4j.Logger;
 import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
 import org.apache.rocketmq.store.GetMessageResult;
 import org.apache.rocketmq.store.GetMessageStatus;
-import org.apache.rocketmq.store.SelectMappedBufferResult;
 
 /**
  * ShardingKey 级别的顺序消费管理器
@@ -96,8 +95,8 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
 
     @Override
     public GetMessageResult getAvailableMessageResult(String attemptId, long popTime, long invisibleTime,
-        String topicId, String groupId, int queueId, int batchSize) {
-        return popMessageFromCache(attemptId, popTime, invisibleTime, topicId, groupId, queueId, batchSize);
+        String topicId, String groupId, int queueId, int batchSize, StringBuilder orderCountInfoBuilder) {
+        return popMessageFromCache(attemptId, popTime, invisibleTime, topicId, groupId, queueId, batchSize, orderCountInfoBuilder);
     }
 
     /**
@@ -105,7 +104,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
      * POP 请求首先调用此方法，如果有缓存消息则直接返回，避免读取存储
      */
     public GetMessageResult popMessageFromCache(String attemptId, long popTime, long invisibleTime, String topic,
-        String group, int queueId, int maxCount) {
+        String group, int queueId, int maxCount, StringBuilder orderCountInfoBuilder) {
         try {
             ShardingKeyCache.CachedMessage cachedMessages = cache.getAvailableMessages(topic, group, queueId, maxCount);
             if (cachedMessages == null) {
@@ -115,7 +114,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
 
             // 合并构建GetMessageResult和创建锁的操作，避免重复遍历
             GetMessageResult result = buildGetMessageResultAndCreateLocks(attemptId, popTime, invisibleTime,
-                topic, group, queueId, cachedMessages);
+                topic, group, queueId, cachedMessages, orderCountInfoBuilder);
             if (result != null) {
                 log.info("从缓存中成功获取消息: topic={}, group={}, queueId={}, 消息批次数量={}, attemptId={}, offsets={}",
                     topic, group, queueId, result.getMessageCount(), attemptId, result.getMessageQueueOffset());
@@ -208,7 +207,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
      * 一次遍历完成两个操作，提高性能
      */
     private GetMessageResult buildGetMessageResultAndCreateLocks(String attemptId, long popTime, long invisibleTime,
-        String topic, String group, int queueId, ShardingKeyCache.CachedMessage cachedMessage) {
+        String topic, String group, int queueId, ShardingKeyCache.CachedMessage cachedMessage, StringBuilder orderInfoBuilder) {
         if (cachedMessage == null) {
             return null;
         }
@@ -217,21 +216,28 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
         GetMessageResult result = cachedMessage.getMessageResult();
         result.setStatus(GetMessageStatus.FOUND);
         // 过期的消息，需要重新从 store 读取
+        // 并且构建 orderCountInfoBuilder
         if (!cachedMessage.getOffsets().isEmpty() && result.getMessageCount() == 0) {
             log.info("缓存中存在过期消息，从store读取: topic={}, group={}, queueId={}", topic, group, queueId);
             CompletableFuture<GetMessageResult> futureResult = getMessagesAsync(topic, group, queueId, cachedMessage.getOffsets());
             try {
                 // 阻塞当前线程，直到异步操作完成并返回结果
-                return futureResult.join();
+                result = futureResult.join();
                 // 或者 futureResult.get()，但 join() 不抛出受检异常，更简洁
             } catch (Exception e) {
                 // 处理可能发生的异常，例如 CompletionException
                 log.error("过期消息取数据失败了: {}", cachedMessage.getOffsets(), e);
                 return null;
             }
+
+            // 增加重试次数
+            lockManager.increaseCountInfo(topic, group, queueId, cachedMessage.getShardingKey(), cachedMessage.getOffsets());
+
+            // 构建重试次数
+            lockManager.buildCountInfo(topic, group, queueId, cachedMessage.getShardingKey(), cachedMessage.getOffsets(), orderInfoBuilder);
         }
 
-        log.info("构建缓存消息结果并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}",
+        log.info("构建缓存消息、重试次数并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}",
             topic, group, queueId, result.getMessageCount());
 
         // 给出去的消息要加锁

@@ -32,6 +32,7 @@ import org.apache.rocketmq.common.ThreadFactoryImpl;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.org.slf4j.Logger;
 import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
+import org.apache.rocketmq.remoting.protocol.header.ExtraInfoUtil;
 import org.apache.rocketmq.store.GetMessageResult;
 import org.apache.rocketmq.store.GetMessageStatus;
 
@@ -132,6 +133,24 @@ public class ShardingKeyLockManager {
         return lock.needBlock(attemptId);
     }
 
+    public void increaseCountInfo(String topic, String group, int queueId, String shardingKeyHash, List<Long> offsets) {
+        ShardingKeyLock lock = getLock(topic, group, queueId, shardingKeyHash);
+        if (lock != null) {
+            lock.setRetryTimes(lock.getRetryTimes() + 1);
+            log.info("重试次数增加: {}, 当前为: {}", shardingKeyHash, lock.getRetryTimes());
+        }
+    }
+
+    public void buildCountInfo(String topic, String group, int queueId, String shardingKeyHash, List<Long> offsets, StringBuilder orderInfoBuilder) {
+        // 构建 orderCountInfoBuild
+        offsets.forEach(offset -> {
+            ShardingKeyLock lock = getLock(topic, group, queueId, shardingKeyHash);
+            if (lock != null) {
+                ExtraInfoUtil.buildQueueOffsetOrderCountInfo(orderInfoBuilder, topic, queueId, offset, lock.getRetryTimes());
+            }
+        });
+    }
+
     /**
      * 创建或更新sharding key锁
      */
@@ -166,6 +185,9 @@ public class ShardingKeyLockManager {
             k -> new ShardingKeyLock(popTime, lockFreeTimestamp, attemptId));
 //        System.out.println("增加 shardingKey 的锁: " + shardingKeyHash);
         log.info("增加 shardingKey 的锁: " + shardingKeyHash);
+
+        // 更新锁的 popTime
+        lock.setPopTime(popTime);
 
         // 添加offset到锁中
         for (long offset : offsets) {
@@ -405,7 +427,6 @@ public class ShardingKeyLockManager {
      * 处理过期锁
      */
     private void handleExpiredLock(String topic, String group, int queueId, String shardingKeyHash) {
-        String topicGroupKey = MessageShardingKeyUtil.buildTopicGroupIdentifier(topic, group);
         ShardingKeyLock lock = getLock(topic, group, queueId, shardingKeyHash);
         if (lock == null) {
             log.error("消息过期，但是该消息的锁已经不存在: {}", shardingKeyHash);
@@ -424,18 +445,21 @@ public class ShardingKeyLockManager {
 //            removeOffsetToShardingKey(topicGroupKey, queueId, offset);
 //        }
 
-        // 重试次数增加
-        lock.setRetryTimes(lock.getRetryTimes() + 1);
-        log.info("锁已经过期，重试次数增加: {}, 当前为: {}", shardingKeyHash, lock.getRetryTimes());
-
         // 增加过期消息到可用消息中，这里没有消息具体内容，只有 offset，和 found 的 GetMessageResult
         log.info("锁已经过期，将过期的sharding key添加到可用缓存中: {}, offsets: {}", shardingKeyHash, offsets);
         GetMessageResult result = new GetMessageResult();
         result.setStatus(GetMessageStatus.FOUND);
         cache.addAvailableMessage(topic, group, queueId, shardingKeyHash, result, new ArrayList<>(offsets));
 
+        // 重新过期
+        long newTimestamp = lock.getLockFreeTimestamp() + lock.getInvisibleTime();
+        lock.setLockFreeTimestamp(newTimestamp);
+        scheduleExpireTask(topic, group, queueId, shardingKeyHash, newTimestamp);
+
         // 唤醒长轮询
-        notifyLongPolling(topic, group, ALL_QUEUES);
+        if (brokerController.getBrokerConfig().isEnableNotifyAfterPopOrderLockRelease()) {
+            notifyLongPolling(topic, group, ALL_QUEUES);
+        }
     }
 
     /**
@@ -574,7 +598,7 @@ public class ShardingKeyLockManager {
         }
 
         @Override
-        public void run(Timeout timeout) throws Exception {
+        public void run(Timeout timeout) {
             if (timeout.isCancelled()) {
                 return;
             }
@@ -583,7 +607,13 @@ public class ShardingKeyLockManager {
 
             // 清理timeout映射
             String lockKey = buildLockKey(topic, group, queueId, shardingKeyHash);
-            timeoutMap.remove(lockKey, timeout);
+            timeoutMap.computeIfPresent(lockKey, (key1, curTimeout) -> {
+                if (curTimeout == timeout) {
+                    // remove from map
+                    return null;
+                }
+                return curTimeout;
+            });
         }
     }
 
