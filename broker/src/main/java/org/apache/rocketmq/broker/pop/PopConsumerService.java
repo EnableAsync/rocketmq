@@ -332,10 +332,9 @@ public class PopConsumerService extends ServiceThread {
                 return CompletableFuture.completedFuture(result);
             } else {
                 if (result.isFifo()) {
-
                     GetMessageResult cacheResult = getAvailableMessageResult(result.getAttemptId(), result.getPopTime(), result.getInvisibleTime(), groupId, topicId, queueId, batchSize);
-                    if (cacheResult != null) {
-                        brokerLogger.info("没有从 store 取消息，直接从 cache 中取消息, groupId={}, topicId={}, queueId={}, batchSize={}, offset={}",
+                    if (cacheResult != null) { // 确保 GetMessageResult 拿到的消息是有消息体的
+                        brokerLogger.info("尝试直接从 cache 中取消息, groupId={}, topicId={}, queueId={}, batchSize={}, offset={}",
                             groupId, topicId, queueId, batchSize, cacheResult.getMessageQueueOffset());
                         // 不走 store 读取消息，直接从 cache 中取消息
                         // 这里就不用再走 handleGetMessageResult 去预读和加锁了
@@ -343,7 +342,7 @@ public class PopConsumerService extends ServiceThread {
                         final long consumeOffset = this.getPopOffset(groupId, topicId, queueId, result.getInitMode());
                         result.addGetMessageResult(cacheResult, topicId, queueId, retryType, consumeOffset);
                         brokerLogger.info("从 cache 中获取的 Result: {}", cacheResult);
-                        for (int i = 0;i < cacheResult.getMessageBufferList().size(); i++) {
+                        for (int i = 0; i < cacheResult.getMessageBufferList().size(); i++) {
                             brokerLogger.info("从 cache 中获取的 Result 的 bytebuffer 的可读字节: {}", cacheResult.getMessageBufferList().get(i).remaining());
                         }
                         return CompletableFuture.completedFuture(result);

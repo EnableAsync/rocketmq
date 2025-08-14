@@ -21,16 +21,17 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.common.OrderedConsumptionLevel;
 import org.apache.rocketmq.common.ThreadFactoryImpl;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.org.slf4j.Logger;
 import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
-import org.apache.rocketmq.remoting.protocol.header.ExtraInfoUtil;
 import org.apache.rocketmq.store.GetMessageResult;
 import org.apache.rocketmq.store.GetMessageStatus;
 import org.apache.rocketmq.store.SelectMappedBufferResult;
@@ -106,8 +107,8 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     public GetMessageResult popMessageFromCache(String attemptId, long popTime, long invisibleTime, String topic,
         String group, int queueId, int maxCount) {
         try {
-            List<ShardingKeyCache.CachedMessage> cachedMessages = cache.getAvailableMessages(topic, group, queueId, maxCount);
-            if (cachedMessages.isEmpty()) {
+            ShardingKeyCache.CachedMessage cachedMessages = cache.getAvailableMessages(topic, group, queueId, maxCount);
+            if (cachedMessages == null) {
                 log.debug("缓存中无可用消息: topic={}, group={}, queueId={}", topic, group, queueId);
                 return null;
             }
@@ -128,27 +129,114 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     }
 
     /**
+     * 从 store 中读取出多个 offset 的消息
+     * TODO: 可以优化，现在是每个都去读一遍
+     */
+    private CompletableFuture<GetMessageResult> getMessagesAsync(String topic, String group, int queueId,
+        List<Long> offsets) {
+        // 为每个 offset 创建一个异步任务
+        List<CompletableFuture<GetMessageResult>> futures = offsets.stream()
+            .map(offset -> brokerController.getMessageStore().getMessageAsync(group, topic, queueId, offset, 1, null))
+            .collect(Collectors.toList());
+
+        // 用 allOf 等待所有任务完成
+        CompletableFuture<Void> allDoneFuture = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+
+        // 当所有任务都完成后，处理和合并结果
+        return allDoneFuture.thenApply(v -> {
+            // 因为 allDoneFuture 完成时，可以保证 futures 列表中的所有 future 也都已完成，
+            // 所以这里调用 join() 不会阻塞。
+            List<GetMessageResult> results = futures.stream()
+                .map(CompletableFuture::join)
+                .collect(Collectors.toList());
+
+            // 合并所有 GetMessageResult
+            return mergeGetMessageResults(results);
+        });
+    }
+
+    /**
+     * 合并多个 GetMessageResult
+     *
+     * @param results 多个查询的结果列表
+     * @return 一个合并后的 GetMessageResult
+     */
+    private GetMessageResult mergeGetMessageResults(List<GetMessageResult> results) {
+        if (results == null || results.isEmpty()) {
+            GetMessageResult emptyResult = new GetMessageResult();
+            emptyResult.setStatus(GetMessageStatus.NO_MESSAGE_IN_QUEUE);
+            return emptyResult;
+        }
+
+        GetMessageResult mergedResult = new GetMessageResult();
+        long minOffset = Long.MAX_VALUE;
+        long maxOffset = -1;
+        long nextBeginOffset = -1;
+        boolean messageFound = false;
+
+        for (GetMessageResult result : results) {
+            if (result.getStatus() == GetMessageStatus.FOUND) {
+                messageFound = true;
+
+                for (int i = 0; i < result.getMessageMapedList().size(); i++) {
+                    mergedResult.addMessage(result.getMessageMapedList().get(i), result.getMessageQueueOffset().get(i));
+                }
+
+                minOffset = Math.min(minOffset, result.getMinOffset());
+                maxOffset = Math.max(maxOffset, result.getMaxOffset());
+                nextBeginOffset = Math.max(nextBeginOffset, result.getNextBeginOffset());
+            }
+        }
+
+        if (messageFound) {
+            mergedResult.setStatus(GetMessageStatus.FOUND);
+            mergedResult.setMinOffset(minOffset);
+            mergedResult.setMaxOffset(maxOffset);
+            mergedResult.setNextBeginOffset(nextBeginOffset);
+        } else {
+            // 如果一条消息都没找到，设置一个合适的状态
+            // 这里假设如果所有请求都是 NO_MESSAGE_IN_QUEUE，最终结果也是它
+            // 你可以根据业务逻辑选择更精确的状态
+            mergedResult.setStatus(results.get(0).getStatus());
+            mergedResult.setNextBeginOffset(results.get(results.size() - 1).getNextBeginOffset());
+        }
+        return mergedResult;
+    }
+
+    /**
      * 从缓存消息构建 GetMessageResult 并同时创建锁
      * 一次遍历完成两个操作，提高性能
      */
     private GetMessageResult buildGetMessageResultAndCreateLocks(String attemptId, long popTime, long invisibleTime,
-        String topic, String group, int queueId, List<ShardingKeyCache.CachedMessage> cachedMessages) {
-        if (cachedMessages == null || cachedMessages.isEmpty()) {
+        String topic, String group, int queueId, ShardingKeyCache.CachedMessage cachedMessage) {
+        if (cachedMessage == null) {
             return null;
         }
 
-        // 直接使用第一个 CachedMessage 的 GetMessageResult
         // 因为每个 CachedMessage 代表一批完整的消息，可以直接返回
-        // 先不做 GetMessageResult 的合并
-        GetMessageResult result = cachedMessages.get(0).getMessageResult();
+        GetMessageResult result = cachedMessage.getMessageResult();
         result.setStatus(GetMessageStatus.FOUND);
+        // 过期的消息，需要重新从 store 读取
+        if (!cachedMessage.getOffsets().isEmpty() && result.getMessageCount() == 0) {
+            log.info("缓存中存在过期消息，从store读取: topic={}, group={}, queueId={}", topic, group, queueId);
+            CompletableFuture<GetMessageResult> futureResult = getMessagesAsync(topic, group, queueId, cachedMessage.getOffsets());
+            try {
+                // 阻塞当前线程，直到异步操作完成并返回结果
+                return futureResult.join();
+                // 或者 futureResult.get()，但 join() 不抛出受检异常，更简洁
+            } catch (Exception e) {
+                // 处理可能发生的异常，例如 CompletionException
+                log.error("过期消息取数据失败了: {}", cachedMessage.getOffsets(), e);
+                return null;
+            }
+        }
 
         log.info("构建缓存消息结果并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}",
-            topic, group, queueId, cachedMessages.size());
+            topic, group, queueId, result.getMessageCount());
 
         // 给出去的消息要加锁
-        lockManager.createOrUpdateLock(topic, group, queueId, cachedMessages.get(0).getShardingKey(),
-            popTime, invisibleTime, attemptId, cachedMessages.get(0).getOffsets());
+        lockManager.createOrUpdateLock(topic, group, queueId, cachedMessage.getShardingKey(),
+            popTime, invisibleTime, attemptId, cachedMessage.getOffsets());
 
         return result;
     }
@@ -190,10 +278,10 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
                     log.info("分发出去的消息: shardingKey={}, offset={}", shardingKey, currentOffset);
                     availableShardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(currentOffset);
                 }
+                lockManager.updateOffsetToShardingKeyMapping(topic, group, queueId, currentOffset, shardingKey);
             }
 
             // Cache 中需要存储 GetMessageResult 中的 offset、SelectMappedBufferResult
-
             // 将被阻塞的消息存入不可用缓存
             // 之后需要从缓存中恢复出来 GetMessageResult
             if (!unavailableIndices.isEmpty()) {
@@ -243,7 +331,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
                 }
 
                 if (!offsets.isEmpty()) {
-                    GetMessageResult extractedResult = extractMessagesForShardingKey(getMessageResult, indices, shardingKey, offsets);
+                    GetMessageResult extractedResult = extractGetMessagesResultForShardingKey(getMessageResult, indices, shardingKey, offsets);
                     if (extractedResult != null) {
                         cache.addUnavailableMessage(topic, group, queueId, shardingKey, extractedResult, offsets);
                     }
@@ -257,7 +345,8 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     /**
      * 从完整的 GetMessageResult 中提取特定 shardingKey 的消息
      */
-    private GetMessageResult extractMessagesForShardingKey(GetMessageResult originalResult, List<Integer> indices, String shardingKey, List<Long> offsets) {
+    private GetMessageResult extractGetMessagesResultForShardingKey(GetMessageResult originalResult,
+        List<Integer> indices, String shardingKey, List<Long> offsets) {
         if (originalResult == null) {
             return null;
         }
@@ -274,44 +363,6 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             return result;
         } catch (Exception e) {
             log.warn("Failed to create shardingKey message result", e);
-            return null;
-        }
-    }
-
-    /**
-     * 从完整的GetMessageResult中创建单个消息的结果
-     * 使用 GetMessageResult 的 addMessage 方法，避免反射
-     */
-    private GetMessageResult createSingleMessageResult(GetMessageResult originalResult, int index) {
-        if (originalResult == null || index < 0 || index >= originalResult.getMessageBufferList().size()) {
-            return null;
-        }
-
-        try {
-            GetMessageResult singleResult = new GetMessageResult();
-            singleResult.setStatus(originalResult.getStatus());
-            singleResult.setNextBeginOffset(originalResult.getNextBeginOffset());
-            singleResult.setMinOffset(originalResult.getMinOffset());
-            singleResult.setMaxOffset(originalResult.getMaxOffset());
-            singleResult.setSuggestPullingFromSlave(originalResult.isSuggestPullingFromSlave());
-
-            // 使用 addMessage 方法添加单个消息，避免反射
-            if (originalResult.getMessageMapedList() != null && index < originalResult.getMessageMapedList().size()) {
-                SelectMappedBufferResult mapedBuffer = originalResult.getMessageMapedList().get(index);
-                long queueOffset = (originalResult.getMessageQueueOffset() != null && index < originalResult.getMessageQueueOffset().size())
-                    ? originalResult.getMessageQueueOffset().get(index)
-                    : -1L;
-
-                if (queueOffset != -1L) {
-                    singleResult.addMessage(mapedBuffer, queueOffset);
-                } else {
-                    singleResult.addMessage(mapedBuffer);
-                }
-            }
-
-            return singleResult;
-        } catch (Exception e) {
-            log.warn("Failed to create single message result", e);
             return null;
         }
     }

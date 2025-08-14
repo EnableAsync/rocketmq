@@ -20,6 +20,7 @@ import io.netty.util.HashedWheelTimer;
 import io.netty.util.Timeout;
 import io.netty.util.Timer;
 import io.netty.util.TimerTask;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -31,6 +32,8 @@ import org.apache.rocketmq.common.ThreadFactoryImpl;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.org.slf4j.Logger;
 import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
+import org.apache.rocketmq.store.GetMessageResult;
+import org.apache.rocketmq.store.GetMessageStatus;
 
 /**
  * Sharding Key锁管理器
@@ -96,6 +99,22 @@ public class ShardingKeyLockManager {
             100, TimeUnit.MILLISECONDS, 512);
     }
 
+    private ShardingKeyLock getLock(String topic, String group, int queueId, String shardingKeyHash) {
+        String topicGroupKey = MessageShardingKeyUtil.buildTopicGroupIdentifier(topic, group);
+        // 测试时，shardingKey 用明文
+//        String shardingKeyHash = MessageShardingKeyUtil.calculateHashKey(shardingKey);
+        ConcurrentHashMap<Integer, ConcurrentHashMap<String, ShardingKeyLock>> queueMap =
+            shardingKeyLockMap.get(topicGroupKey);
+        if (queueMap == null) {
+            return null;
+        }
+        ConcurrentHashMap<String, ShardingKeyLock> shardingKeyMap = queueMap.get(queueId);
+        if (shardingKeyMap == null) {
+            return null;
+        }
+        return shardingKeyMap.get(shardingKeyHash);
+    }
+
     /**
      * 检查指定sharding key是否被锁定
      */
@@ -105,23 +124,7 @@ public class ShardingKeyLockManager {
             return false; // 重复请求，不阻塞
         }
 
-        String topicGroupKey = MessageShardingKeyUtil.buildTopicGroupIdentifier(topic, group);
-//        String shardingKeyHash = MessageShardingKeyUtil.calculateHashKey(shardingKey);
-        String shardingKeyHash = shardingKey;
-
-        ConcurrentHashMap<Integer, ConcurrentHashMap<String, ShardingKeyLock>> queueMap =
-            shardingKeyLockMap.get(topicGroupKey);
-
-        if (queueMap == null) {
-            return false;
-        }
-
-        ConcurrentHashMap<String, ShardingKeyLock> shardingKeyMap = queueMap.get(queueId);
-        if (shardingKeyMap == null) {
-            return false;
-        }
-
-        ShardingKeyLock lock = shardingKeyMap.get(shardingKeyHash);
+        ShardingKeyLock lock = getLock(topic, group, queueId, shardingKey);
         if (lock == null) {
             return false;
         }
@@ -179,32 +182,32 @@ public class ShardingKeyLockManager {
             shardingKey, offsets.size(), lockFreeTimestamp);
     }
 
-    /**
-     * 根据消息过滤结果进行锁的筛选
-     */
-    public MessageShardingKeyUtil.MessageFilterResult filterMessagesByLock(String topic, String group, int queueId,
-        String attemptId, MessageShardingKeyUtil.MessageShardingInfo shardingInfo) {
-        MessageShardingKeyUtil.MessageFilterResult result = new MessageShardingKeyUtil.MessageFilterResult();
-
-        // 按sharding key分组消息
-        Map<String, List<MessageShardingKeyUtil.MessageInfo>> shardingKeyGroups = shardingInfo.getShardingKeyGroups();
-
-        for (Map.Entry<String, List<MessageShardingKeyUtil.MessageInfo>> entry : shardingKeyGroups.entrySet()) {
-            String shardingKey = entry.getKey();
-            List<MessageShardingKeyUtil.MessageInfo> messages = entry.getValue();
-
-            // 检查该sharding key是否被锁定
-            if (isLocked(topic, group, queueId, shardingKey, attemptId)) {
-                // 被锁定，加入阻塞列表
-                result.addBlockedMessages(shardingKey, messages);
-            } else {
-                // 未被锁定，加入可用列表
-                result.addAvailableMessages(shardingKey, messages);
-            }
-        }
-
-        return result;
-    }
+//    /**
+//     * 根据消息过滤结果进行锁的筛选
+//     */
+//    public MessageShardingKeyUtil.MessageFilterResult filterMessagesByLock(String topic, String group, int queueId,
+//        String attemptId, MessageShardingKeyUtil.MessageShardingInfo shardingInfo) {
+//        MessageShardingKeyUtil.MessageFilterResult result = new MessageShardingKeyUtil.MessageFilterResult();
+//
+//        // 按sharding key分组消息
+//        Map<String, List<MessageShardingKeyUtil.MessageInfo>> shardingKeyGroups = shardingInfo.getShardingKeyGroups();
+//
+//        for (Map.Entry<String, List<MessageShardingKeyUtil.MessageInfo>> entry : shardingKeyGroups.entrySet()) {
+//            String shardingKey = entry.getKey();
+//            List<MessageShardingKeyUtil.MessageInfo> messages = entry.getValue();
+//
+//            // 检查该sharding key是否被锁定
+//            if (isLocked(topic, group, queueId, shardingKey, attemptId)) {
+//                // 被锁定，加入阻塞列表
+//                result.addBlockedMessages(shardingKey, messages);
+//            } else {
+//                // 未被锁定，加入可用列表
+//                result.addAvailableMessages(shardingKey, messages);
+//            }
+//        }
+//
+//        return result;
+//    }
 
     /**
      * 释放指定 offset 对应的 sharding key 锁
@@ -304,17 +307,7 @@ public class ShardingKeyLockManager {
             return;
         }
 
-        ConcurrentHashMap<Integer, ConcurrentHashMap<String, ShardingKeyLock>> queueMap = shardingKeyLockMap.get(topicGroupKey);
-        if (queueMap == null) {
-            return;
-        }
-
-        ConcurrentHashMap<String, ShardingKeyLock> shardingKeyMap = queueMap.get(queueId);
-        if (shardingKeyMap == null) {
-            return;
-        }
-
-        ShardingKeyLock lock = shardingKeyMap.get(shardingKeyHash);
+        ShardingKeyLock lock = getLock(topic, group, queueId, shardingKeyHash);
         if (lock == null || lock.getPopTime() != popTime) {
             return;
         }
@@ -412,39 +405,46 @@ public class ShardingKeyLockManager {
      * 处理过期锁
      */
     private void handleExpiredLock(String topic, String group, int queueId, String shardingKeyHash) {
-        log.info("有锁过期，但是当前先不处理");
-        return;
-//        String topicGroupKey = MessageShardingKeyUtil.buildTopicGroupIdentifier(topic, group);
-//
-//        ConcurrentHashMap<Integer, ConcurrentHashMap<String, ShardingKeyLock>> queueMap = shardingKeyLockMap.get(topicGroupKey);
-//        if (queueMap == null) {
-//            return;
+        String topicGroupKey = MessageShardingKeyUtil.buildTopicGroupIdentifier(topic, group);
+        ShardingKeyLock lock = getLock(topic, group, queueId, shardingKeyHash);
+        if (lock == null) {
+            log.error("消息过期，但是该消息的锁已经不存在: {}", shardingKeyHash);
+            return;
+        }
+
+        Set<Long> offsets = lock.getOffsetSet();
+        if (offsets.isEmpty()) {
+            log.warn("消息过期，但是该shardingKey无 offset: {}", shardingKeyHash);
+            return;
+        }
+
+        // 过期的时候不用删 offset -> shardingKey
+        // offset -> shardingKey 表示会被读到的消息
+//        for (Long offset : offsets) {
+//            removeOffsetToShardingKey(topicGroupKey, queueId, offset);
 //        }
-//
-//        ConcurrentHashMap<String, ShardingKeyLock> shardingKeyMap = queueMap.get(queueId);
-//        if (shardingKeyMap == null) {
-//            return;
-//        }
-//
-//        ShardingKeyLock lock = shardingKeyMap.remove(shardingKeyHash);
-//        if (lock != null) {
-//            // 将过期的sharding key添加到可用缓存中
-//            String cacheKey = MessageShardingKeyUtil.buildTopicGroupQueueIdentifier(topic, group, queueId);
-//            Set<String> expiredSet = expiredShardingKeyCache.computeIfAbsent(
-//                cacheKey, k -> ConcurrentHashMap.newKeySet());
-//            expiredSet.add(shardingKeyHash);
-//
-//            // 移除所有offset映射
-//            for (Long offset : lock.getOffsetSet()) {
-//                removeOffsetToShardingKey(topicGroupKey, queueId, offset);
-//            }
-//
-//            log.info("锁已经过期，释放了锁: {} in topic: {}, group: {}, queueId: {}, offsets: {}",
-//                shardingKeyHash, topic, group, queueId, lock.getOffsetSet());
-//
-//            // 唤醒长轮询
-//            notifyLongPolling(topic, group, -1);
-//        }
+
+        // 重试次数增加
+        lock.setRetryTimes(lock.getRetryTimes() + 1);
+        log.info("锁已经过期，重试次数增加: {}, 当前为: {}", shardingKeyHash, lock.getRetryTimes());
+
+        // 增加过期消息到可用消息中，这里没有消息具体内容，只有 offset，和 found 的 GetMessageResult
+        log.info("锁已经过期，将过期的sharding key添加到可用缓存中: {}, offsets: {}", shardingKeyHash, offsets);
+        GetMessageResult result = new GetMessageResult();
+        result.setStatus(GetMessageStatus.FOUND);
+        cache.addAvailableMessage(topic, group, queueId, shardingKeyHash, result, new ArrayList<>(offsets));
+
+        // 唤醒长轮询
+        notifyLongPolling(topic, group, ALL_QUEUES);
+    }
+
+    /**
+     * 更新offset到sharding key的映射
+     */
+    public void updateOffsetToShardingKeyMapping(String topic, String group, int queueId, long offset,
+        String shardingKeyHash) {
+        String topicGroupKey = MessageShardingKeyUtil.buildTopicGroupIdentifier(topic, group);
+        updateOffsetShardingKeyMapping(topicGroupKey, queueId, offset, shardingKeyHash);
     }
 
     /**

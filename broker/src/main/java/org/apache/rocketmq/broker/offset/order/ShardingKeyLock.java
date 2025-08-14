@@ -19,6 +19,7 @@ package org.apache.rocketmq.broker.offset.order;
 import com.alibaba.fastjson.annotation.JSONField;
 import com.google.common.base.MoreObjects;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -56,7 +57,13 @@ public class ShardingKeyLock {
      */
     @JSONField(name = "a")
     private String attemptId;
-    
+
+    /**
+     * 消息的重试次数
+     */
+    @JSONField(name = "r")
+    private int retryTimes;
+
     /**
      * 锁创建时间
      */
@@ -64,7 +71,7 @@ public class ShardingKeyLock {
     private long createTime;
     
     public ShardingKeyLock() {
-        this.offsetSet = ConcurrentHashMap.newKeySet();
+        this.offsetSet = new TreeSet<>();
         this.createTime = System.currentTimeMillis();
     }
     
@@ -75,7 +82,15 @@ public class ShardingKeyLock {
         this.attemptId = attemptId;
         this.invisibleTime = lockFreeTimestamp - popTime;
     }
-    
+
+    public int getRetryTimes() {
+        return retryTimes;
+    }
+
+    public void setRetryTimes(int retryTimes) {
+        this.retryTimes = retryTimes;
+    }
+
     /**
      * 通过不可见时间创建锁的静态方法
      */
@@ -183,7 +198,7 @@ public class ShardingKeyLock {
     }
     
     public void setOffsetSet(Set<Long> offsetSet) {
-        this.offsetSet = offsetSet != null ? offsetSet : ConcurrentHashMap.newKeySet();
+        this.offsetSet = offsetSet != null ? offsetSet : new TreeSet<>();
     }
     
     public long getLockFreeTimestamp() {

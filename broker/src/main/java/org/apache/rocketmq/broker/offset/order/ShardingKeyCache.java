@@ -16,7 +16,6 @@
  */
 package org.apache.rocketmq.broker.offset.order;
 
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -28,7 +27,6 @@ import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.org.slf4j.Logger;
 import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
 import org.apache.rocketmq.store.GetMessageResult;
-import org.apache.rocketmq.store.SelectMappedBufferResult;
 
 /**
  * Sharding Key缓存管理类
@@ -144,7 +142,7 @@ public class ShardingKeyCache {
     private final ConcurrentHashMap<String/*queueKey*/, ConcurrentHashMap<String/*shardingKey*/, CachedMessage>> unavailableMessagesMap;
 
     // 缓存统计信息
-    private final AtomicLong totalCachedMessages;
+    private final AtomicLong totalCachedContextMessages;
     private final AtomicLong totalHits;
     private final AtomicLong totalMisses;
 
@@ -155,13 +153,15 @@ public class ShardingKeyCache {
     public ShardingKeyCache() {
         this.availableMessagesMap = new ConcurrentHashMap<>();
         this.unavailableMessagesMap = new ConcurrentHashMap<>();
-        this.totalCachedMessages = new AtomicLong(0);
+        this.totalCachedContextMessages = new AtomicLong(0);
         this.totalHits = new AtomicLong(0);
         this.totalMisses = new AtomicLong(0);
     }
 
     /**
      * 添加可用消息到缓存
+     * ack 的时候添加有消息体的消息
+     * 过期的时候添加没有消息体的消息
      *
      * @param topic         主题
      * @param group         消费组
@@ -172,7 +172,7 @@ public class ShardingKeyCache {
      */
     public void addAvailableMessage(String topic, String group, int queueId, String shardingKey,
         GetMessageResult messageResult, List<Long> offsets) {
-        if (messageResult == null || offsets == null || offsets.isEmpty()) {
+        if (offsets == null || offsets.isEmpty()) {
             return;
         }
 
@@ -184,17 +184,17 @@ public class ShardingKeyCache {
         if (queue.size() >= MAX_QUEUE_SIZE) {
             CachedMessage removed = queue.poll();
             if (removed != null) {
-                totalCachedMessages.decrementAndGet();
+                totalCachedContextMessages.decrementAndGet();
                 log.warn("缓存队列已满，移除最旧消息: {}", removed);
             }
         }
 
         CachedMessage availableMessage = new CachedMessage(topic, group, queueId, shardingKey, messageResult, offsets);
         queue.offer(availableMessage);
-        totalCachedMessages.incrementAndGet();
+        totalCachedContextMessages.addAndGet(messageResult.getMessageCount());
 
-        log.info("添加可用消息批次到缓存: topic={}, group={}, queueId={}, shardingKey={}, 消息数量={}",
-            topic, group, queueId, shardingKey, offsets.size());
+        log.info("添加可用消息批次到缓存: topic={}, group={}, queueId={}, shardingKey={}, 有内容的消息数量={}, offset={}",
+            topic, group, queueId, shardingKey, messageResult.getMessageCount(), offsets);
     }
 
     /**
@@ -233,7 +233,7 @@ public class ShardingKeyCache {
                 return v;
             }
         });
-        totalCachedMessages.incrementAndGet();
+        totalCachedContextMessages.incrementAndGet();
 
         log.info("添加不可用消息批次到缓存: topic={}, group={}, queueId={}, shardingKey={}, 消息数量={}",
             topic, group, queueId, shardingKey, offsets.size());
@@ -276,7 +276,7 @@ public class ShardingKeyCache {
     /**
      * 获取指定队列的可用消息（优先从可用缓存获取）
      */
-    public List<CachedMessage> getAvailableMessages(String topic, String group, int queueId, int maxCount) {
+    public CachedMessage getAvailableMessages(String topic, String group, int queueId, int maxCount) {
         log.info("shardingKeyCache 从缓存中获取可用消息: topic={}, group={}, queueId={}, 最大获取消息批次数量={}", topic, group, queueId, maxCount);
         String queueKey = MessageShardingKeyUtil.buildTopicGroupQueueIdentifier(topic, group, queueId);
         ConcurrentLinkedQueue<CachedMessage> queue = availableMessagesMap.get(queueKey);
@@ -284,42 +284,21 @@ public class ShardingKeyCache {
         if (queue == null || queue.isEmpty()) {
             log.info("可用消息缓存的 queue 为空: topic={}, group={}, queueId={}", topic, group, queueId);
             totalMisses.incrementAndGet();
-            return new ArrayList<>();
+            return null;
         }
 
-        List<CachedMessage> result = new ArrayList<>();
-        result.add(queue.poll()); // 先只加一条
+        CachedMessage result = queue.poll();
 
-//        int count = 0;
-//
-//        while (count < maxCount && !queue.isEmpty()) {
-//            CachedMessage message = queue.poll();
-//            if (message == null) {
-//                break;
-//            }
-//
-////            // 检查消息是否过期
-////            if (message.isExpired(MAX_CACHE_TIME)) {
-////                totalCachedMessages.decrementAndGet();
-////                log.warn("移除过期缓存消息: {}", message);
-////                continue;
-////            }
-//
-//            result.add(message);
-//            totalCachedMessages.getAndAdd(-message.getOffsets().size());
-//            count += message.getOffsets().size();
-//        }
-
-        if (!result.isEmpty()) {
+        if (result != null) {
             totalHits.incrementAndGet();
             log.info("从缓存中获取可用消息成功: topic={}, group={}, queueId={}, 获取消息批次数量={}",
-                topic, group, queueId, result.size());
+                topic, group, queueId, result.getOffsets().size());
         } else {
             totalMisses.incrementAndGet();
             log.debug("从缓存中未找到可用消息: topic={}, group={}, queueId={}", topic, group, queueId);
         }
 
-        return result;
+        return result; // 先只加一条
     }
 
     /**
@@ -348,14 +327,14 @@ public class ShardingKeyCache {
 
             // 检查消息是否过期
             if (message.isExpired(MAX_CACHE_TIME)) {
-                totalCachedMessages.decrementAndGet();
+                totalCachedContextMessages.decrementAndGet();
                 log.warn("移除过期缓存消息: {}", message);
                 continue;
             }
 
             if (message.matchShardingKey(shardingKey)) {
                 result.add(message);
-                totalCachedMessages.decrementAndGet();
+                totalCachedContextMessages.decrementAndGet();
                 count++;
             } else {
                 // 不匹配的消息重新放回队列
@@ -421,14 +400,14 @@ public class ShardingKeyCache {
         int removedCount = 0;
         if (availableQueue != null) {
             removedCount += availableQueue.size();
-            totalCachedMessages.addAndGet(-availableQueue.size());
+            totalCachedContextMessages.addAndGet(-availableQueue.size());
         }
 
         // 清除不可用缓存
         ConcurrentHashMap<String, CachedMessage> unavailableMap = unavailableMessagesMap.remove(queueKey);
         if (unavailableMap != null) {
             removedCount += unavailableMap.size();
-            totalCachedMessages.addAndGet(-unavailableMap.size());
+            totalCachedContextMessages.addAndGet(-unavailableMap.size());
         }
 
         if (removedCount > 0) {
@@ -458,7 +437,7 @@ public class ShardingKeyCache {
                 }
 
                 if (message.isExpired(MAX_CACHE_TIME)) {
-                    totalCachedMessages.decrementAndGet();
+                    totalCachedContextMessages.decrementAndGet();
                     expiredCount++;
                 } else {
                     // 未过期的消息重新放回队列
@@ -485,7 +464,7 @@ public class ShardingKeyCache {
 
             for (String key : expiredKeys) {
                 shardingKeyMap.remove(key);
-                totalCachedMessages.decrementAndGet();
+                totalCachedContextMessages.decrementAndGet();
             }
         }
 
@@ -499,7 +478,7 @@ public class ShardingKeyCache {
      */
     public CacheStatistics getStatistics() {
         return new CacheStatistics(
-            totalCachedMessages.get(),
+            totalCachedContextMessages.get(),
             totalHits.get(),
             totalMisses.get(),
             availableMessagesMap.size() + unavailableMessagesMap.size()
@@ -510,10 +489,10 @@ public class ShardingKeyCache {
      * 清空所有缓存
      */
     public void clear() {
-        int totalCleared = totalCachedMessages.intValue();
+        int totalCleared = totalCachedContextMessages.intValue();
         availableMessagesMap.clear();
         unavailableMessagesMap.clear();
-        totalCachedMessages.set(0);
+        totalCachedContextMessages.set(0);
         log.info("Cleared all cached messages, total: {}", totalCleared);
     }
 
