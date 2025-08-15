@@ -475,15 +475,15 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             }, 5, 5, TimeUnit.MINUTES);
 
             // 每10分钟清理一次过期的缓存消息
-            cleanupExecutor.scheduleAtFixedRate(() -> {
-                try {
-                    if (cache != null) {
-                        cache.cleanupExpiredMessages();
-                    }
-                } catch (Exception e) {
-                    log.error("Failed to clean expired cache messages", e);
-                }
-            }, 10, 10, TimeUnit.MINUTES);
+//            cleanupExecutor.scheduleAtFixedRate(() -> {
+//                try {
+//                    if (cache != null) {
+//                        cache.cleanupExpiredMessages();
+//                    }
+//                } catch (Exception e) {
+//                    log.error("Failed to clean expired cache messages", e);
+//                }
+//            }, 10, 10, TimeUnit.MINUTES);
 
             started = true;
             log.info("ShardingKeyLevelConsumerManager started successfully");

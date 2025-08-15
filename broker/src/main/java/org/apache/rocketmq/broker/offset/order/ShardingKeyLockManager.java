@@ -44,6 +44,7 @@ public class ShardingKeyLockManager {
 
     private static final Logger log = LoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
     public static final int ALL_QUEUES = -1;
+    private static final int TIMER_TICK_MS = 100;
 
     /**
      * 主锁存储结构：topic@group -> queueId -> shardingKeyHash -> ShardingKeyLock
@@ -96,8 +97,8 @@ public class ShardingKeyLockManager {
 
         // 初始化时间轮定时器
         this.timer = new HashedWheelTimer(
-            new ThreadFactoryImpl("ShardingKeyLockManager_"),
-            100, TimeUnit.MILLISECONDS, 512);
+            new ThreadFactoryImpl("ConsumerShardingKeyOrderInfoLockManager_"),
+            TIMER_TICK_MS, TimeUnit.MILLISECONDS);
     }
 
     private ShardingKeyLock getLock(String topic, String group, int queueId, String shardingKeyHash) {
@@ -183,6 +184,8 @@ public class ShardingKeyLockManager {
         // 创建或更新锁
         ShardingKeyLock lock = shardingKeyMap.computeIfAbsent(shardingKeyHash,
             k -> new ShardingKeyLock(popTime, lockFreeTimestamp, attemptId));
+//        ShardingKeyLock lock = new ShardingKeyLock(popTime, lockFreeTimestamp, attemptId);
+//        shardingKeyMap.put(shardingKeyHash, lock);
 //        System.out.println("增加 shardingKey 的锁: " + shardingKeyHash);
         log.info("增加 shardingKey 的锁: " + shardingKeyHash);
 
@@ -405,10 +408,10 @@ public class ShardingKeyLockManager {
             timeoutMap.put(lockKey, timeout);
 //            System.out.println("定时任务: " + timeoutMap);
             log.info("增加定时任务: {}", lockKey);
-        } else {
+        }/* else {
             // 已过期，直接处理
             handleExpiredLock(topic, group, queueId, shardingKeyHash);
-        }
+        }*/
     }
 
     /**
@@ -450,11 +453,6 @@ public class ShardingKeyLockManager {
         GetMessageResult result = new GetMessageResult();
         result.setStatus(GetMessageStatus.FOUND);
         cache.addAvailableMessage(topic, group, queueId, shardingKeyHash, result, new ArrayList<>(offsets));
-
-        // 重新过期
-        long newTimestamp = lock.getLockFreeTimestamp() + lock.getInvisibleTime();
-        lock.setLockFreeTimestamp(newTimestamp);
-        scheduleExpireTask(topic, group, queueId, shardingKeyHash, newTimestamp);
 
         // 唤醒长轮询
         if (brokerController.getBrokerConfig().isEnableNotifyAfterPopOrderLockRelease()) {
@@ -602,6 +600,9 @@ public class ShardingKeyLockManager {
             if (timeout.isCancelled()) {
                 return;
             }
+
+            log.info("锁过期了，先不处理");
+//            return;
 
             handleExpiredLock(topic, group, queueId, shardingKeyHash);
 

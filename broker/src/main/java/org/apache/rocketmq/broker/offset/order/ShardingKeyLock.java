@@ -21,6 +21,8 @@ import com.google.common.base.MoreObjects;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ConcurrentSkipListSet;
 
 /**
  * Sharding Key级别的锁结构
@@ -71,7 +73,7 @@ public class ShardingKeyLock {
     private long createTime;
     
     public ShardingKeyLock() {
-        this.offsetSet = new TreeSet<>();
+        this.offsetSet = new ConcurrentSkipListSet<>();
         this.createTime = System.currentTimeMillis();
     }
     
