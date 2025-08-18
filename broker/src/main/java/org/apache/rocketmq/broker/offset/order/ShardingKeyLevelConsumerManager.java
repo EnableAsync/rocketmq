@@ -86,7 +86,15 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             // 真正的阻塞逻辑在 update 方法中通过分析 sharding key 来实现
             log.debug("CheckBlock for sharding key level: topic={}, group={}, queueId={}, attemptId={}",
                 topic, group, queueId, attemptId);
-            return false;
+//            return cache.checkBlockAddUnavailableMessages()
+
+            if (cache.checkBlock(topic, group, queueId)) {
+                log.info("QUEUE 中的消息数量已到达 1000，开始阻塞: topic={}, group={}, queueId={}", topic, group, queueId);
+                return true;
+            } else {
+                return false;
+            }
+//            return false;
         } catch (Exception e) {
             log.error("Failed to check block for topic: {}, group: {}, queueId: {}", topic, group, queueId, e);
             return true; // 出错时保守阻塞

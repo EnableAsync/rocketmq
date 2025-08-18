@@ -17,9 +17,7 @@
 package org.apache.rocketmq.broker.offset.order;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicLong;
@@ -39,6 +37,23 @@ import org.apache.rocketmq.store.GetMessageResult;
 public class ShardingKeyCache {
 
     private static final Logger log = LoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
+    public static final int ShardingKeyMaxMessageCount = 20;
+
+    // 可用消息队列，按 topic@group@queueId 分组，里面的都是可用的，不用区分 shardingKey 了
+    // 分发出去的时候，根据 shardingKey 加锁就好
+    private final ConcurrentHashMap<String, ConcurrentLinkedQueue<CachedMessage>> availableMessagesMap;
+
+    // 不可用消息缓存：QueueKey -> ShardingKey -> 消息
+    private final ConcurrentHashMap<String/*queueKey*/, ConcurrentHashMap<String/*shardingKey*/, CachedMessage>> unavailableMessagesMap;
+
+    // 缓存统计信息
+    private final AtomicLong totalCachedBodyMessages;
+    private final AtomicLong totalHits;
+    private final AtomicLong totalMisses;
+
+    // 缓存配置
+    private static final long MAX_CACHE_TIME = 30 * 1000; // 30秒最大缓存时间
+    private static final int MAX_QUEUE_SIZE = 100; // 单个队列最大缓存消息数
 
     /**
      * 缓存的消息信息
@@ -64,35 +79,6 @@ public class ShardingKeyCache {
             this.createTime = System.currentTimeMillis();
         }
 
-        /**
-         * 检查消息是否过期
-         */
-        public boolean isExpired(long maxCacheTime) {
-            return System.currentTimeMillis() - createTime > maxCacheTime;
-        }
-
-        /**
-         * 匹配队列
-         */
-        public boolean matchQueue(String topic, String group, int queueId) {
-            return this.topic.equals(topic) && this.group.equals(group) && this.queueId == queueId;
-        }
-
-        /**
-         * 匹配 shardingKey
-         */
-        public boolean matchShardingKey(String shardingKey) {
-            return this.shardingKey.equals(shardingKey);
-        }
-
-        /**
-         * 获取最小 offset
-         */
-        public long getMinOffset() {
-            return offsets.isEmpty() ? -1L : Collections.min(offsets);
-        }
-
-        // Getters
         public String getTopic() {
             return topic;
         }
@@ -134,26 +120,10 @@ public class ShardingKeyCache {
         }
     }
 
-    // 可用消息队列，按 topic@group@queueId 分组，里面的都是可用的，不用区分 shardingKey 了
-    // 分发出去的时候，根据 shardingKey 加锁就好
-    private final ConcurrentHashMap<String, ConcurrentLinkedQueue<CachedMessage>> availableMessagesMap;
-
-    // 不可用消息缓存：QueueKey -> ShardingKey -> 消息
-    private final ConcurrentHashMap<String/*queueKey*/, ConcurrentHashMap<String/*shardingKey*/, CachedMessage>> unavailableMessagesMap;
-
-    // 缓存统计信息
-    private final AtomicLong totalCachedContextMessages;
-    private final AtomicLong totalHits;
-    private final AtomicLong totalMisses;
-
-    // 缓存配置
-    private static final long MAX_CACHE_TIME = 30 * 1000; // 30秒最大缓存时间
-    private static final int MAX_QUEUE_SIZE = 1000; // 单个队列最大缓存消息数
-
     public ShardingKeyCache() {
         this.availableMessagesMap = new ConcurrentHashMap<>();
         this.unavailableMessagesMap = new ConcurrentHashMap<>();
-        this.totalCachedContextMessages = new AtomicLong(0);
+        this.totalCachedBodyMessages = new AtomicLong(0);
         this.totalHits = new AtomicLong(0);
         this.totalMisses = new AtomicLong(0);
     }
@@ -180,21 +150,18 @@ public class ShardingKeyCache {
         ConcurrentLinkedQueue<CachedMessage> queue = availableMessagesMap.computeIfAbsent(
             queueKey, k -> new ConcurrentLinkedQueue<>());
 
-        // 检查队列大小限制
-        if (queue.size() >= MAX_QUEUE_SIZE) {
-            CachedMessage removed = queue.poll();
-            if (removed != null) {
-                totalCachedContextMessages.decrementAndGet();
-                log.warn("缓存队列已满，移除最旧消息: {}", removed);
-            }
-        }
-
         CachedMessage availableMessage = new CachedMessage(topic, group, queueId, shardingKey, messageResult, offsets);
         queue.offer(availableMessage);
-        totalCachedContextMessages.addAndGet(messageResult.getMessageCount());
+//        totalCachedBodyMessages.addAndGet(messageResult.getMessageCount());
 
         log.info("添加可用消息批次到缓存: topic={}, group={}, queueId={}, shardingKey={}, 有内容的消息数量={}, offset={}",
             topic, group, queueId, shardingKey, messageResult.getMessageCount(), offsets);
+    }
+
+    public boolean checkBlock(String topic, String group, int queueId) {
+        // TODO: 需要改成 MAX_QUEUE_SIZE * QUEUE_NUM
+        // 当前只有一个 queue
+        return totalCachedBodyMessages.get() > MAX_QUEUE_SIZE;
     }
 
     /**
@@ -233,7 +200,7 @@ public class ShardingKeyCache {
                 return v;
             }
         });
-        totalCachedContextMessages.incrementAndGet();
+        totalCachedBodyMessages.addAndGet(offsets.size());
 
         log.info("添加不可用消息批次到缓存: topic={}, group={}, queueId={}, shardingKey={}, 消息数量={}",
             topic, group, queueId, shardingKey, offsets.size());
@@ -270,6 +237,7 @@ public class ShardingKeyCache {
 
         log.info("激活消息批次成功: topic={}, group={}, queueId={}, shardingKey={}, 激活消息数量={}, 缓存状态为={}",
             topic, group, queueId, shardingKey, cachedMessage.getOffsets().size(), availableMessagesMap);
+        totalCachedBodyMessages.addAndGet(-cachedMessage.getOffsets().size());
         return true;
     }
 
@@ -293,71 +261,13 @@ public class ShardingKeyCache {
             totalHits.incrementAndGet();
             log.info("从缓存中获取可用消息成功: topic={}, group={}, queueId={}, 获取消息批次数量={}",
                 topic, group, queueId, result.getOffsets().size());
+//            totalCachedBodyMessages.addAndGet(-result.getOffsets().size());
         } else {
             totalMisses.incrementAndGet();
             log.debug("从缓存中未找到可用消息: topic={}, group={}, queueId={}", topic, group, queueId);
         }
 
         return result; // 先只加一条
-    }
-
-    /**
-     * 获取指定 shardingKey 的可用消息
-     */
-    public List<CachedMessage> getAvailableMessagesByShardingKey(String topic, String group, int queueId,
-        String shardingKey, int maxCount) {
-        String queueKey = MessageShardingKeyUtil.buildTopicGroupQueueIdentifier(topic, group, queueId);
-        ConcurrentLinkedQueue<CachedMessage> queue = availableMessagesMap.get(queueKey);
-
-        if (queue == null || queue.isEmpty()) {
-            totalMisses.incrementAndGet();
-            return new ArrayList<>();
-        }
-
-        List<CachedMessage> result = new ArrayList<>();
-        List<CachedMessage> toRequeue = new ArrayList<>();
-        int count = 0;
-
-        // 遍历队列寻找匹配的 shardingKey
-        while (count < maxCount && !queue.isEmpty()) {
-            CachedMessage message = queue.poll();
-            if (message == null) {
-                break;
-            }
-
-            // 检查消息是否过期
-            if (message.isExpired(MAX_CACHE_TIME)) {
-                totalCachedContextMessages.decrementAndGet();
-                log.warn("移除过期缓存消息: {}", message);
-                continue;
-            }
-
-            if (message.matchShardingKey(shardingKey)) {
-                result.add(message);
-                totalCachedContextMessages.decrementAndGet();
-                count++;
-            } else {
-                // 不匹配的消息重新放回队列
-                toRequeue.add(message);
-            }
-        }
-
-        // 将不匹配的消息重新放回队列
-        for (CachedMessage message : toRequeue) {
-            queue.offer(message);
-        }
-
-        if (!result.isEmpty()) {
-            totalHits.incrementAndGet();
-            log.info("按ShardingKey从缓存中获取可用消息成功: topic={}, group={}, queueId={}, shardingKey={}, 获取消息批次数量={}",
-                topic, group, queueId, shardingKey, result.size());
-        } else {
-            totalMisses.incrementAndGet();
-            log.debug("按ShardingKey从缓存中未找到可用消息: topic={}, group={}, queueId={}, shardingKey={}",
-                topic, group, queueId, shardingKey);
-        }
-
-        return result;
     }
 
     /**
@@ -400,14 +310,14 @@ public class ShardingKeyCache {
         int removedCount = 0;
         if (availableQueue != null) {
             removedCount += availableQueue.size();
-            totalCachedContextMessages.addAndGet(-availableQueue.size());
+            totalCachedBodyMessages.addAndGet(-availableQueue.size());
         }
 
         // 清除不可用缓存
         ConcurrentHashMap<String, CachedMessage> unavailableMap = unavailableMessagesMap.remove(queueKey);
         if (unavailableMap != null) {
             removedCount += unavailableMap.size();
-            totalCachedContextMessages.addAndGet(-unavailableMap.size());
+            totalCachedBodyMessages.addAndGet(-unavailableMap.size());
         }
 
         if (removedCount > 0) {
@@ -417,68 +327,11 @@ public class ShardingKeyCache {
     }
 
     /**
-     * 清理过期的缓存消息
-     */
-    public void cleanupExpiredMessages() {
-        int expiredCount = 0;
-
-        // 清理可用缓存中的过期消息
-        for (ConcurrentLinkedQueue<CachedMessage> queue : availableMessagesMap.values()) {
-            if (queue.isEmpty()) {
-                continue;
-            }
-
-            List<CachedMessage> toRequeue = new ArrayList<>();
-
-            while (!queue.isEmpty()) {
-                CachedMessage message = queue.poll();
-                if (message == null) {
-                    break;
-                }
-
-                if (message.isExpired(MAX_CACHE_TIME)) {
-                    totalCachedContextMessages.decrementAndGet();
-                    expiredCount++;
-                } else {
-                    // 未过期的消息重新放回队列
-                    toRequeue.add(message);
-                }
-            }
-
-            // 将未过期的消息重新放回队列
-            for (CachedMessage message : toRequeue) {
-                queue.offer(message);
-            }
-        }
-
-        // 清理不可用缓存中的过期消息
-        for (ConcurrentHashMap<String, CachedMessage> shardingKeyMap : unavailableMessagesMap.values()) {
-            List<String> expiredKeys = new ArrayList<>();
-
-            for (Map.Entry<String, CachedMessage> entry : shardingKeyMap.entrySet()) {
-                if (entry.getValue().isExpired(MAX_CACHE_TIME)) {
-                    expiredKeys.add(entry.getKey());
-                    expiredCount++;
-                }
-            }
-
-            for (String key : expiredKeys) {
-                shardingKeyMap.remove(key);
-                totalCachedContextMessages.decrementAndGet();
-            }
-        }
-
-        if (expiredCount > 0) {
-            log.info("Cleaned up {} expired cached message batches", expiredCount);
-        }
-    }
-
-    /**
      * 获取缓存统计信息
      */
     public CacheStatistics getStatistics() {
         return new CacheStatistics(
-            totalCachedContextMessages.get(),
+            totalCachedBodyMessages.get(),
             totalHits.get(),
             totalMisses.get(),
             availableMessagesMap.size() + unavailableMessagesMap.size()
@@ -489,10 +342,10 @@ public class ShardingKeyCache {
      * 清空所有缓存
      */
     public void clear() {
-        int totalCleared = totalCachedContextMessages.intValue();
+        int totalCleared = totalCachedBodyMessages.intValue();
         availableMessagesMap.clear();
         unavailableMessagesMap.clear();
-        totalCachedContextMessages.set(0);
+        totalCachedBodyMessages.set(0);
         log.info("Cleared all cached messages, total: {}", totalCleared);
     }
 

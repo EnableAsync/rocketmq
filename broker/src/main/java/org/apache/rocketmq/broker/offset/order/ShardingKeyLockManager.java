@@ -600,10 +600,6 @@ public class ShardingKeyLockManager {
             if (timeout.isCancelled()) {
                 return;
             }
-
-            log.info("锁过期了，先不处理");
-//            return;
-
             handleExpiredLock(topic, group, queueId, shardingKeyHash);
 
             // 清理timeout映射
