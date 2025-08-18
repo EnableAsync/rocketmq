@@ -53,7 +53,7 @@ public class ShardingKeyCache {
 
     // 缓存配置
     private static final long MAX_CACHE_TIME = 30 * 1000; // 30秒最大缓存时间
-    private static final int MAX_QUEUE_SIZE = 100; // 单个队列最大缓存消息数
+    private static final int MAX_QUEUE_SIZE = 200; // 单个队列最大缓存消息数
 
     /**
      * 缓存的消息信息
