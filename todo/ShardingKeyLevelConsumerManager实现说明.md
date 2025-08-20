@@ -1,303 +1,102 @@
-# ShardingKeyLevelConsumerManager 实现说明
+# ShardingKeyLevelConsumerManager 实现说明（已按当前实现更新）
 
 ## 概述
 
-ShardingKeyLevelConsumerManager 是基于 sharding key 的并发顺序消费管理器，用于替代传统的队列级别阻塞机制，提升顺序消费的并发度。
-
-## 核心设计思路
-
-### 乐观读取 + 多 shardingKey 并发
-
-传统的队列级别阻塞机制是**先判断是否阻塞，再读取数据**，而 sharding key 级别则是**先读取数据，再判断是否阻塞**。
-
-这种设计的原因是：
-- `sharding key` 存在于 `CommitLog` 的消息属性中，必须完整读取消息体才能解析
-- 为了知道 `sharding key`，我们必须至少进行一次磁盘 I/O 来读取消息内容
-- 采用乐观读取策略，最小化无效读取的代价，避免陷入"忙等"式的CPU和磁盘消耗
-
-### 核心优势
-
-1. **并发性提升**：不同 sharding key 的消息可以并发消费，不会相互阻塞
-2. **资源利用率**：避免了因单个慢消息导致整个队列被阻塞的问题
-3. **向后兼容**：完全兼容现有的 OrderedConsumptionManager 接口
-
-## 架构设计
-
-### 核心组件
-
-1. **MessageShardingKeyUtil**：消息 sharding key 提取和处理工具类
-2. **ShardingKeyLock**：单个 sharding key 的锁结构
-3. **ShardingKeyLockManager**：锁的创建、检查、释放和过期处理管理器
-4. **ShardingKeyCache**：可用消息的缓存管理器
-
-### 核心数据结构
-
-```java
-// 1. shardingKey 锁的三级 Map
-ConcurrentHashMap<String/* topic@group */,
-    ConcurrentHashMap<Integer/* queueId */,
-        ConcurrentHashMap<Long/* shardingKeyHash */, ShardingKeyLock>>> shardingKeyLockMap;
-
-// 2. offset 到 sharding key 的映射
-ConcurrentHashMap<String/* topic@group */,
-    ConcurrentHashMap<Integer/* queueId */,
-        ConcurrentHashMap<Long/* offset */, Long/* shardingKeyHash */>>> offsetToShardingKeyMap;
-
-// 3. attemptId 集合，用于检查重复请求
-Set<String> attemptIdSet;
-
-// 4. 可用消息缓存
-ConcurrentHashMap<String/* topic@group@queueId */, 
-    ConcurrentLinkedQueue<AvailableMessage>> availableMessagesMap;
-```
-
-## 实现细节
-
-### 核心方法实现
-
-#### 1. checkBlock() 方法
-
-```java
-@Override
-public boolean checkBlock(String attemptId, String topic, String group, int queueId, long invisibleTime) {
-    // 对于 sharding key 级别，总是返回 false，让消息先读取出来
-    // 真正的阻塞逻辑在 update 方法中通过分析 sharding key 来实现
-    return false;
-}
-```
-
-**设计决策**：
-- 采用乐观读取策略，总是允许消息先读取
-- 阻塞判断延迟到 update 方法中进行
-
-#### 2. update() 方法
-
-```java
-@Override
-public void update(String attemptId, boolean isRetry, String topic, String group, int queueId,
-                  long popTime, long invisibleTime, List<Long> msgQueueOffsetList,
-                  StringBuilder orderInfoBuilder, GetMessageResult getMessageResult) {
-    // 1. 从GetMessageResult中提取sharding key信息
-    MessageShardingKeyUtil.MessageShardingInfo shardingInfo = 
-        MessageShardingKeyUtil.extractShardingKeyInfo(getMessageResult);
-    
-    // 2. 按sharding key分组消息并创建锁
-    for (Map.Entry<String, List<MessageShardingKeyUtil.MessageInfo>> entry : 
-         shardingInfo.getShardingKeyGroups().entrySet()) {
-        String shardingKey = entry.getKey();
-        List<MessageShardingKeyUtil.MessageInfo> messages = entry.getValue();
-        
-        // 创建或更新锁
-        lockManager.createOrUpdateLock(topic, group, queueId, shardingKey,
-            popTime, invisibleTime, attemptId, offsets);
-        
-        // 构建顺序信息
-        buildOrderInfo(orderInfoBuilder, topic, group, queueId, shardingKey, messages);
-    }
-}
-```
-
-**设计决策**：
-- 从 GetMessageResult 中解析消息的 sharding key
-- 按 sharding key 分组消息，为每个 sharding key 创建独立的锁
-- 支持多个 sharding key 并发处理
-
-#### 3. commitAndNext() 方法
-
-```java
-@Override
-public long commitAndNext(String topic, String group, int queueId, long queueOffset, long popTime) {
-    // 根据 offset 释放对应的 sharding key 锁
-    boolean released = lockManager.releaseLock(topic, group, queueId, queueOffset, popTime);
-    
-    if (released) {
-        return queueOffset + 1;  // 返回下一个偏移量
-    } else {
-        return -2;  // 释放失败，无需提交
-    }
-}
-```
-
-**设计决策**：
-- 通过 offset 查找对应的 sharding key
-- 释放特定 sharding key 的锁，而不是整个队列
-- 支持细粒度的锁释放
-
-### 锁管理机制
-
-#### 锁的创建与更新
-
-1. **三级 Map 结构**：`topic@group -> queueId -> shardingKeyHash -> ShardingKeyLock`
-2. **时间轮定时器**：使用 HashedWheelTimer 处理锁过期
-3. **Offset 映射**：维护 offset 到 sharding key 的映射，支持 ACK 时快速查找
-
-#### 锁的过期处理
-
-```java
-// 过期处理流程
-private void handleExpiredLock(String topic, String group, int queueId, long shardingKeyHash) {
-    // 1. 移除过期锁
-    ShardingKeyLock lock = shardingKeyMap.remove(shardingKeyHash);
-    
-    // 2. 将过期的 sharding key 添加到可用缓存
-    Set<Long> expiredSet = expiredShardingKeyCache.computeIfAbsent(
-        cacheKey, k -> ConcurrentHashMap.newKeySet());
-    expiredSet.add(shardingKeyHash);
-    
-    // 3. 唤醒长轮询
-    notifyLongPolling(topic, group, queueId);
-}
-```
-
-**设计决策**：
-- 过期消息不直接回退位点，而是放入可用缓存
-- 避免因位点回退导致的大量重复消费
-- 支持过期消息的重新投递
-
-### 缓存管理
-
-#### 可用消息缓存
-
-```java
-public class AvailableMessage {
-    private final String topic;
-    private final String group;
-    private final int queueId;
-    private final String shardingKey;
-    private final GetMessageResult messageResult;
-    private final long createTime;
-}
-```
-
-**功能特性**：
-- 支持按队列和 sharding key 进行消息检索
-- 自动过期清理机制
-- 缓存大小限制，防止内存溢出
-
-#### 缓存统计
-
-```java
-public class CacheStatistics {
-    private final long totalCachedMessages;
-    private final long totalHits;
-    private final long totalMisses;
-    private final int queueCount;
-    
-    public double getHitRatio() {
-        long total = totalHits + totalMisses;
-        return total > 0 ? (double) totalHits / total : 0.0;
-    }
-}
-```
-
-## 生命周期管理
-
-### 启动流程
+ShardingKeyLevelConsumerManager 基于 shardingKey 的细粒度锁 + 双缓存机制，实现“按 shardingKey 并发、同 key 串行”的顺序消费，替代队列级串行阻塞，显著提升吞吐。
 
-1. **定时清理任务**：启动 ScheduledExecutorService
-2. **attemptId 清理**：每5分钟清理过期的 attemptId
-3. **缓存清理**：每10分钟清理过期的缓存消息
+核心策略：先读后判定（Optimistic Read）+ 可用/不可用双缓存 + 按 key 加锁。
 
-### 关闭流程
-
-1. **定时任务关闭**：优雅关闭 ScheduledExecutorService
-2. **锁管理器关闭**：关闭时间轮定时器，取消所有定时任务
-3. **缓存清理**：清空所有缓存数据
+## 关键行为（对齐当前代码实现）
 
-## 关键设计决策
+### 1) checkBlock：默认放行，但受缓存水位保护
 
-### 1. 乐观读取策略
+- 语义：优先让 POP 读取，再在 update 中分流阻塞；但当缓存水位过高时触发保护性阻塞。
+- 实现：`ShardingKeyLevelConsumerManager.checkBlock()` 里调用 `ShardingKeyCache.checkBlock()`，依据 `totalCachedBodyMessages > MAX_QUEUE_SIZE (默认200)` 决定是否返回 true。
+- 说明：这是工程化的背压措施，避免缓存积压导致 OOM；与“永不阻塞”的理想设计有差异。
 
-**决策**：采用先读取、后判断的乐观策略
-**原因**：sharding key 需要从消息体中解析，必须进行磁盘 I/O
-**优势**：减少无效的磁盘访问，提高整体性能
+### 2) POP 优先走“可用缓存”，并在返回前创建锁
 
-### 2. 三级 Map 数据结构
+- 语义：若有“可用缓存”中的批次，直接返回，且为该批次创建 shardingKey 锁；若批次仅有 offsets（过期场景），会按 offsets 回源读取消息体。
+- 实现：`popMessageFromCache()` 获取 `CachedMessage` 后，通过 `buildGetMessageResultAndCreateLocks()`：
+  - 若 `GetMessageResult.messageCount == 0` 则调用 `getMessagesAsync()` 并通过 `mergeGetMessageResults()` 合并多 offset 结果；
+  - 创建/更新锁，并构建重试次数统计信息（orderCountInfo）。
 
-**决策**：使用 `topic@group -> queueId -> shardingKeyHash -> ShardingKeyLock` 结构
-**原因**：支持细粒度的锁管理，不同 sharding key 独立处理
-**优势**：提供良好的并发性能和内存局部性
+### 3) update：先读后分流，阻塞项入“不可用缓存”，可用项加锁
 
-### 3. 时间轮定时器
+- 过程：遍历 `GetMessageResult`，解析每条的 shardingKey；根据锁状态分流：
+  - 可用：按 key 聚合 offsets，随后为每个 key `createOrUpdateLock()`；
+  - 被锁：按 key 提取对应索引，构建“仅含该 key 的子结果”，写入“不可用缓存”。
+- 细节：同时维护 `offset -> shardingKey` 映射，用于 ACK 快速定位锁。
 
-**决策**：使用 Netty 的 HashedWheelTimer 处理锁过期
-**原因**：高性能的定时任务调度，适合大量超时任务
-**优势**：低延迟、高吞吐量的定时任务处理
+### 4) 缓存结构：双缓存，但“不可用缓存”为每 key 聚合而非 FIFO 列表
 
-### 4. 缓存机制
+- 可用缓存：`availableMessagesMap: queueKey -> ConcurrentLinkedQueue<CachedMessage>`，每个元素是同一 key 的一个批次（可能是过期 offsets，或被 ACK 激活的有体批次）。
+- 不可用缓存：`unavailableMessagesMap: queueKey -> Map<shardingKey, CachedMessage>`，同一 key 的多次分流会合并到一个 `CachedMessage` 的 `GetMessageResult/offsets` 中，而不是维护一个 FIFO 队列。
+- 影响：能够减少 map/队列数量，但不再是严格的“多批 FIFO 队列”形态；后续可按需要调整为队列模型。
 
-**决策**：引入多级缓存管理
-**原因**：避免过期消息的位点回退，减少重复消费
-**优势**：提高消息投递效率，降低系统负载
+### 5) 锁过期：转为“可用缓存”的 offsets，POP 再回源取体
 
-## 性能优化
+- 定时器：`HashedWheelTimer` 调度过期任务；
+- 过期处理：将该 key 下仍“飞行中”的 offsets 作为一个无体批次加入“可用缓存”（`GetMessageResult.status=FOUND, messageCount=0`），不删除 offset->key 映射；
+- 唤醒：是否在过期时唤醒长轮询由 `brokerConfig.isEnableNotifyAfterPopOrderLockRelease()` 决定。
 
-### 1. 内存管理
+### 6) ACK：释放 offset 对应 key 的锁，若锁清空则激活不可用缓存
 
-- **对象池化**：复用 ShardingKeyLock 对象
-- **批量操作**：支持批量消息处理
-- **内存限制**：设置缓存大小限制，防止内存溢出
+- 定位：通过 `offset -> shardingKey` 定位锁；校验 `popTime`；
+- 行为：从锁中移除该 offset；若 key 下已无剩余 offset：
+  - 取消过期任务；
+  - `cache.activateMessages(topic, group, queueId, shardingKey)` 将“不可用缓存”中该 key 的聚合批次搬迁到“可用缓存”；
+  - 当前实现不在此处直接唤醒长轮询（留给 ACK 流程外侧或策略控制）。
 
-### 2. 锁优化
+### 7) 提交位点：返回“飞行中最小 offset”，而非简单自增
 
-- **细粒度锁**：基于 sharding key 的细粒度锁
-- **无锁数据结构**：使用 ConcurrentHashMap 等无锁数据结构
-- **锁范围最小化**：减少锁的持有时间
+- 实现：`commitAndNext()` 在 ACK 成功后调用 `lockManager.getMinInFlightOffset()`：
+  - 若仍有飞行中消息，返回其中最小 offset；
+  - 若队列无飞行中消息，返回 `queueOffset + 1`；
+  - 失败返回负值（如 -1）。
+- 含义：避免“最小 offset + 1”的错误推进，保证 POP 乱序 ACK 场景下的正确性。
 
-### 3. I/O 优化
+### 8) attemptId：内存去重，不做落盘回放
 
-- **批量读取**：一次性读取多条消息
-- **异步处理**：支持异步消息处理
-- **缓存预热**：预加载热点数据
+- 实现：仅内存 `attemptIdSet` 做“同 attemptId 不阻塞”判定；
+- 暂未实现 attemptId->offsets 的持久化与回放逻辑（文档旧方案设想）。
 
-## 监控与调试
+### 9) 生命周期与清理
 
-### 统计信息
+- start：启动 attemptId 清理的定时任务；缓存过期清理任务暂未启用；
+- persist/load：持久化为统计日志输出；load 返回成功；
+- shutdown：停止时间轮、清理定时任务与缓存。
 
-- **锁统计**：活跃锁数量、过期锁数量
-- **缓存统计**：缓存命中率、缓存大小
-- **性能指标**：处理延迟、吞吐量
+## 与旧方案的主要差异（变更点）
 
-### 调试接口
+1. checkBlock：从“永不阻塞”调整为“默认放行 + 缓存水位阻塞”。
+2. 不可用缓存：从“每 key FIFO 队列”调整为“每 key 聚合单批次（可不断合并）”。
+3. ACK 唤醒：从“激活即唤醒”调整为“激活但不在此处直接唤醒（由上层策略/流程决定）”。
+4. 过期处理：按 offsets 放入可用缓存，再由 POP 回源补体；延迟唤醒受配置控制。
+5. 提交位点：从“queueOffset+1”调整为“飞行中最小 offset 或 queueOffset+1”。
+6. attemptId：去除落盘回放设想，保留内存去重。
 
-```java
-// 获取锁管理器统计信息
-public String getStatistics() {
-    return lockManager.getStatistics();
-}
+## 关键类与数据结构（当前实现）
 
-// 获取缓存统计信息
-public ShardingKeyCache.CacheStatistics getCacheStatistics() {
-    return cache.getStatistics();
-}
-```
+- 锁：`topic@group -> queueId -> shardingKey -> ShardingKeyLock`
+- offset 映射：`topic@group -> queueId -> (offset -> shardingKey)`（跳表，便于最小值检索）
+- 可用缓存：`queueKey -> ConcurrentLinkedQueue<CachedMessage>`
+- 不可用缓存：`queueKey -> Map<shardingKey, CachedMessage>`（聚合批次）
 
-## 兼容性
+## 监控与统计
 
-### 接口兼容性
+- 锁统计：group/queue/locks/attemptIds；
+- 缓存统计：cachedMessages/hits/misses/hitRatio/queues；
+- orderCountInfo：对过期重取的消息构建重试次数信息。
 
-- **完全兼容**：实现 OrderedConsumptionManager 接口
-- **无缝切换**：通过配置切换队列级别或 sharding key 级别
-- **向后兼容**：保持与现有代码的完全兼容
+## 已知限制与后续计划（TODO）
 
-### 配置兼容性
+- attemptId 落盘与回放：支持幂等重试按 offsets 回源重建结果；
+- 缓存 TTL 清理：启用并实现 `MAX_CACHE_TIME` 的周期清理；
+- 不可用缓存结构：可切换为“每 key FIFO 队列”以获得更强序控制与内存上限隔离；
+- 水位策略：`MAX_QUEUE_SIZE` 动态化（按队列数量/内存占用）；
+- 批量回源：合并多 offset 的读取以减少 I/O 次数（现已并发 + 合并结果，仍有优化空间）。
 
-```java
-// 在 FIFOConsumptionManager 中的配置切换
-if (brokerController.getBrokerConfig().getOrderedConsumptionLevel() == OrderedConsumptionLevel.SHARDING_KEY) {
-    this.orderedConsumptionManager = new ShardingKeyLevelConsumerManager(brokerController);
-} else {
-    this.orderedConsumptionManager = new QueueLevelConsumerManager(brokerController);
-}
-```
+## 结语
 
-## 总结
-
-ShardingKeyLevelConsumerManager 通过引入基于 sharding key 的细粒度锁机制，在保证顺序消费语义的前提下，显著提升了消费并发度。其核心创新在于：
-
-1. **乐观读取**：先读取消息再判断阻塞，适应 sharding key 解析的需求
-2. **细粒度锁**：基于 sharding key 的独立锁，不同业务并发处理
-3. **高性能设计**：时间轮定时器、无锁数据结构、多级缓存
-4. **完全兼容**：无缝替换现有队列级别实现
-
-该实现为 RocketMQ 的顺序消费提供了更高的并发性能，同时保持了良好的可维护性和扩展性。
+当前实现已满足“按 shardingKey 并发、同 key 串行”的核心目标，并通过双缓存与过期转可用机制降低重复拉取与位点回退的代价。上述差异为工程化权衡，可按业务与资源约束逐步补齐。

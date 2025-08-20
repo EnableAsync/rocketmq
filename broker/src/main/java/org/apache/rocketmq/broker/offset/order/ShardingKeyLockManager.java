@@ -334,6 +334,7 @@ public class ShardingKeyLockManager {
 
         ShardingKeyLock lock = getLock(topic, group, queueId, shardingKeyHash);
         if (lock == null || lock.getPopTime() != popTime) {
+            log.warn("更新不可见时间时 pop time 不一致: {}", offset);
             return;
         }
 
