@@ -483,6 +483,8 @@ public class AckMessageProcessor implements NettyRequestProcessor {
                 if (!consumerOffsetManager.hasOffsetReset(topic, consumeGroup, qId)) {
                     String remoteAddress = RemotingHelper.parseSocketAddressAddr(channel.remoteAddress());
                     consumerOffsetManager.commitOffset(remoteAddress, consumeGroup, topic, qId, consumerOffsetManager.queryPullOffset(consumeGroup, topic, qId));
+                    // broker 重启之后，重新消费的情况，需要唤醒所有 queue 的长轮询
+                    this.brokerController.getPopMessageProcessor().notifyMessageArriving(topic, -1, consumeGroup);
                 }
             }
         } finally {

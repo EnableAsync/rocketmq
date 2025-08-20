@@ -343,7 +343,7 @@ public class ShardingKeyLockManager {
         // 重新调度过期任务
         scheduleExpireTask(topic, group, queueId, shardingKeyHash, nextVisibleTime);
 
-        log.debug("Updated next visible time for shardingKey: {}, offset: {}, nextVisibleTime: {}",
+        log.info("更新不可见时间 shardingKey: {}, offset: {}, nextVisibleTime: {}",
             shardingKeyHash, offset, nextVisibleTime);
     }
 

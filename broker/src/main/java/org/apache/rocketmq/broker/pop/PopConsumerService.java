@@ -310,21 +310,6 @@ public class PopConsumerService extends ServiceThread {
                 return CompletableFuture.completedFuture(result);
             }
 
-            if (result.isFifo()) {
-                // Current requests would calculate the total number of messages
-                // waiting to be filtered for new message arrival notifications in
-                // the long-polling service, need disregarding the backlog in order
-                // consumption scenario. If rest message num including the blocked
-                // queue accumulation would lead to frequent unnecessary wake-ups
-                // of long-polling requests, resulting unnecessary CPU usage.
-                // When client ack message, long-polling request would be notifications
-                // by AckMessageProcessor.ackOrderly() and message will not be delayed.
-                if (isFifoBlocked(result, groupId, topicId, queueId)) {
-                    // should not add accumulation(max offset - consumer offset) here
-                    return CompletableFuture.completedFuture(result);
-                }
-            }
-
             // TODO: 什么作用呢？
             int remain = batchSize - result.getMessageCount();
             if (remain <= 0) {
@@ -351,6 +336,20 @@ public class PopConsumerService extends ServiceThread {
                             groupId, topicId, queueId, batchSize);
                     }
                 }
+
+                // Current requests would calculate the total number of messages
+                // waiting to be filtered for new message arrival notifications in
+                // the long-polling service, need disregarding the backlog in order
+                // consumption scenario. If rest message num including the blocked
+                // queue accumulation would lead to frequent unnecessary wake-ups
+                // of long-polling requests, resulting unnecessary CPU usage.
+                // When client ack message, long-polling request would be notifications
+                // by AckMessageProcessor.ackOrderly() and message will not be delayed.
+                if (isFifoBlocked(result, groupId, topicId, queueId)) {
+                    // should not add accumulation(max offset - consumer offset) here
+                    return CompletableFuture.completedFuture(result);
+                }
+
                 final long consumeOffset = this.getPopOffset(groupId, topicId, queueId, result.getInitMode());
                 return getMessageAsync(clientHost, groupId, topicId, queueId, consumeOffset, remain, filter)
                     .thenApply(getMessageResult -> handleGetMessageResult(

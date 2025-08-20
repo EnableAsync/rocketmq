@@ -427,10 +427,10 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     public void updateNextVisibleTime(String topic, String group, int queueId, long queueOffset,
         long popTime, long nextVisibleTime) {
         try {
-            lockManager.updateNextVisibleTime(topic, group, queueId, queueOffset, popTime, nextVisibleTime);
-
-            log.debug("Updated next visible time for offset: {} in topic: {}, group: {}, queueId: {}, nextVisibleTime: {}",
+            log.info("更新不可见时间 offset: {} in topic: {}, group: {}, queueId: {}, nextVisibleTime: {}",
                 queueOffset, topic, group, queueId, nextVisibleTime);
+
+            lockManager.updateNextVisibleTime(topic, group, queueId, queueOffset, popTime, nextVisibleTime);
         } catch (Exception e) {
             log.error("Failed to update next visible time for offset: {} in topic: {}, group: {}, queueId: {}",
                 queueOffset, topic, group, queueId, e);
