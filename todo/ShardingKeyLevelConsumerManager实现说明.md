@@ -56,10 +56,10 @@ ShardingKeyLevelConsumerManager 基于 shardingKey 的细粒度锁 + 双缓存�
   - 失败返回负值（如 -1）。
 - 含义：避免“最小 offset + 1”的错误推进，保证 POP 乱序 ACK 场景下的正确性。
 
-### 8) attemptId：内存去重，不做落盘回放
+### 8) attemptId：防止发出去的消息用户一直收不到
 
-- 实现：仅内存 `attemptIdSet` 做“同 attemptId 不阻塞”判定；
-- 暂未实现 attemptId->offsets 的持久化与回放逻辑（文档旧方案设想）。
+- 实现：记录 attemptId 到 shardingKey 的映射
+- 当收到相同的 attemptId 时，让之前的 shardingKey 锁对应的消息放入可用消息列表中，与过期操作一样处理，可以参考 handleExpiredLock
 
 ### 9) 生命周期与清理
 
