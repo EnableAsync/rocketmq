@@ -87,7 +87,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
 //            return cache.checkBlockAddUnavailableMessages()
 
             if (cache.checkBlock(topic, group, queueId)) {
-                log.info("QUEUE 中的消息数量已到达 1000，开始阻塞: topic={}, group={}, queueId={}", topic, group, queueId);
+                log.info("QUEUE 中的消息数量已到达上限，开始阻塞: topic={}, group={}, queueId={}", topic, group, queueId);
                 return true;
             } else {
                 return false;
