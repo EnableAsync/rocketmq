@@ -68,6 +68,10 @@ public class FIFOConsumptionManager {
         return this.orderedConsumptionManager.load();
     }
 
+    public void start() {
+        this.orderedConsumptionManager.start();
+    }
+
     public void shutdown() {
         this.orderedConsumptionManager.shutdown();
     }

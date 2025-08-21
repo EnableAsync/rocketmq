@@ -22,13 +22,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.common.OrderedConsumptionLevel;
-import org.apache.rocketmq.common.ThreadFactoryImpl;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.org.slf4j.Logger;
 import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
@@ -467,20 +465,21 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
         }
 
         try {
-            // 启动定时清理任务
-            cleanupExecutor = Executors.newSingleThreadScheduledExecutor(
-                new ThreadFactoryImpl("ShardingKeyLevelConsumerManager_Cleanup_"));
 
-            // 每5分钟清理一次过期的 attemptId
-            cleanupExecutor.scheduleAtFixedRate(() -> {
-                try {
-                    if (lockManager != null) {
-                        lockManager.cleanExpiredAttemptIds();
-                    }
-                } catch (Exception e) {
-                    log.error("Failed to clean expired attempt IDs", e);
-                }
-            }, 5, 5, TimeUnit.MINUTES);
+//            // 启动定时清理任务
+//            cleanupExecutor = Executors.newSingleThreadScheduledExecutor(
+//                new ThreadFactoryImpl("ShardingKeyLevelConsumerManager_Cleanup_"));
+//
+//            // 每5分钟清理一次过期的 attemptId
+//            cleanupExecutor.scheduleAtFixedRate(() -> {
+//                try {
+//                    if (lockManager != null) {
+//                        lockManager.cleanExpiredAttemptIds();
+//                    }
+//                } catch (Exception e) {
+//                    log.error("Failed to clean expired attempt IDs", e);
+//                }
+//            }, 5, 5, TimeUnit.MINUTES);
 
             // 每10分钟清理一次过期的缓存消息
 //            cleanupExecutor.scheduleAtFixedRate(() -> {
@@ -554,6 +553,10 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
 
             ShardingKeyCache.CacheStatistics cacheStats = cache.getStatistics();
             log.debug("ShardingKeyCache statistics: {}", cacheStats);
+
+            // 记录重试次数存储统计信息
+            String retryStorageStats = lockManager.getRetryStorageStatistics();
+            log.debug("ShardingKeyRetryStorage statistics: {}", retryStorageStats);
         } catch (Exception e) {
             log.error("Failed to persist ShardingKeyLevelConsumerManager state", e);
         }
@@ -566,6 +569,10 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     @Override
     public boolean load() {
         try {
+            // 启动锁管理器（包括重试次数持久化存储）
+            if (lockManager != null) {
+                lockManager.load();
+            }
             log.info("ShardingKeyLevelConsumerManager loaded successfully (simplified implementation)");
             return true;
         } catch (Exception e) {

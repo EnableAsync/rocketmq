@@ -39,6 +39,7 @@ import org.apache.rocketmq.store.GetMessageStatus;
 /**
  * Sharding Key锁管理器
  * 负责管理所有sharding key级别的锁，支持锁的创建、检查、释放和过期处理
+ * 集成重试次数持久化功能
  */
 public class ShardingKeyLockManager {
 
@@ -86,6 +87,11 @@ public class ShardingKeyLockManager {
      */
     private final ConcurrentHashMap<String, Set<String>> expiredShardingKeyCache;
 
+    /**
+     * 重试次数持久化存储
+     */
+    private final ShardingKeyRetryStorage retryStorage;
+
     public ShardingKeyLockManager(BrokerController brokerController, ShardingKeyCache cache) {
         this.brokerController = brokerController;
         this.cache = cache;
@@ -95,10 +101,28 @@ public class ShardingKeyLockManager {
         this.timeoutMap = new ConcurrentHashMap<>(1024);
         this.expiredShardingKeyCache = new ConcurrentHashMap<>(256);
 
+        // 初始化重试次数持久化存储
+        this.retryStorage = new ShardingKeyRetryStorage(
+            brokerController.getMessageStoreConfig().getStorePathRootDir());
+
         // 初始化时间轮定时器
         this.timer = new HashedWheelTimer(
             new ThreadFactoryImpl("ConsumerShardingKeyOrderInfoLockManager_"),
             TIMER_TICK_MS, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * 启动锁管理器
+     */
+    public boolean load() {
+        // 启动重试次数持久化存储
+        boolean storageStarted = retryStorage.load();
+        if (!storageStarted) {
+            log.warn("Failed to start ShardingKeyRetryStorage, retry times persistence will be disabled");
+        }
+
+        log.info("ShardingKeyLockManager started, retry storage: {}", storageStarted ? "enabled" : "disabled");
+        return true;
     }
 
     private ShardingKeyLock getLock(String topic, String group, int queueId, String shardingKeyHash) {
@@ -137,8 +161,13 @@ public class ShardingKeyLockManager {
     public void increaseCountInfo(String topic, String group, int queueId, String shardingKeyHash, List<Long> offsets) {
         ShardingKeyLock lock = getLock(topic, group, queueId, shardingKeyHash);
         if (lock != null) {
-            lock.setRetryTimes(lock.getRetryTimes() + 1);
-            log.info("重试次数增加: {}, 当前为: {}", shardingKeyHash, lock.getRetryTimes());
+            int newRetryTimes = lock.getRetryTimes() + 1;
+            lock.setRetryTimes(newRetryTimes);
+
+            // 持久化重试次数
+            retryStorage.setRetryTimes(topic, group, queueId, shardingKeyHash, newRetryTimes);
+
+            log.info("重试次数增加: {}, 当前为: {}", shardingKeyHash, newRetryTimes);
         }
     }
 
@@ -182,11 +211,16 @@ public class ShardingKeyLockManager {
         long lockFreeTimestamp = popTime + invisibleTime;
 
         // 创建或更新锁
-        ShardingKeyLock lock = shardingKeyMap.computeIfAbsent(shardingKeyHash,
-            k -> new ShardingKeyLock(popTime, lockFreeTimestamp, attemptId));
-//        ShardingKeyLock lock = new ShardingKeyLock(popTime, lockFreeTimestamp, attemptId);
-//        shardingKeyMap.put(shardingKeyHash, lock);
-//        System.out.println("增加 shardingKey 的锁: " + shardingKeyHash);
+        ShardingKeyLock lock = shardingKeyMap.computeIfAbsent(shardingKeyHash, k -> {
+            ShardingKeyLock newLock = new ShardingKeyLock(popTime, lockFreeTimestamp, attemptId);
+            // 从持久化存储中读取重试次数
+            int persistedRetryTimes = retryStorage.getRetryTimes(topic, group, queueId, shardingKeyHash);
+            newLock.setRetryTimes(persistedRetryTimes);
+            log.info("创建新锁，从持久化存储读取重试次数: shardingKey={}, retryTimes={}",
+                shardingKeyHash, persistedRetryTimes);
+            return newLock;
+        });
+
         log.info("增加 shardingKey 的锁: " + shardingKeyHash);
 
         // 更新锁的 popTime
@@ -295,6 +329,11 @@ public class ShardingKeyLockManager {
                 boolean activated = cache.activateMessages(topic, group, queueId, shardingKeyHash);
                 log.info("释放了 shardingKey 的锁: {}", shardingKeyHash);
                 shardingKeyMap.remove(shardingKeyHash);
+
+                // 清理持久化的重试次数记录
+                retryStorage.removeRetryTimes(topic, group, queueId, shardingKeyHash);
+                log.info("清理持久化重试次数记录: shardingKey={}", shardingKeyHash);
+
                 if (activated) {
                     // 激活成功后，确保有新消息，唤醒长轮询
 //                    notifyLongPolling(topic, group, ALL_QUEUES);
@@ -577,6 +616,9 @@ public class ShardingKeyLockManager {
         // 关闭时间轮
         timer.stop();
 
+        // 关闭重试次数持久化存储
+        retryStorage.shutdown();
+
         log.info("ShardingKeyLockManager shutdown completed");
     }
 
@@ -664,5 +706,17 @@ public class ShardingKeyLockManager {
         }
 
         return queueOffsetMap.size();
+    }
+
+    /**
+     * 获取重试次数存储的统计信息
+     */
+    public String getRetryStorageStatistics() {
+        if (retryStorage.isStarted()) {
+            return String.format("RetryStorage: cacheSize=%d, started=%s",
+                retryStorage.getCacheSize(), retryStorage.isStarted());
+        } else {
+            return "RetryStorage: disabled";
+        }
     }
 }

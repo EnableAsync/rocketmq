@@ -112,10 +112,6 @@ public interface OrderedConsumptionManager {
      */
     void persist();
 
-    /**
-     * 加载控制器
-     * 从存储加载数据
-     */
     boolean load();
 
     /**

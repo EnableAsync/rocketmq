@@ -67,6 +67,14 @@ ShardingKeyLevelConsumerManager 基于 shardingKey 的细粒度锁 + 双缓存�
 - persist/load：持久化为统计日志输出；load 返回成功；
 - shutdown：停止时间轮、清理定时任务与缓存。
 
+### 10) 重试次数持久化
+- 存储介质：RocksDB（路径：`$storePathRootDir/kvStore/shardingKeyRetry`）
+- Key 设计：`topic@group@queueId@shardingKey`
+- Value 设计：int（`retryTimes`）
+- 清理时机：锁完全释放（`releaseLock(...)` 且该 shardingKey 下无剩余 offset）后，删除对应 Key 的持久化记录
+- 失败策略：持久化失败仅影响统计，不阻塞主流程；读取失败回退为 0
+- 落盘策略：尽可能高性能的进行读写，允许一定程度失败
+
 ## 与旧方案的主要差异（变更点）
 
 1. checkBlock：从“永不阻塞”调整为“默认放行 + 缓存水位阻塞”。
