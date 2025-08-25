@@ -69,7 +69,6 @@ import org.slf4j.LoggerFactory;
 public class PopConsumerService extends ServiceThread {
 
     private static final Logger log = LoggerFactory.getLogger(LoggerName.ROCKETMQ_POP_LOGGER_NAME);
-    private static final Logger brokerLogger = LoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
     private static final long OFFSET_NOT_EXIST = -1L;
     private static final String ROCKSDB_DIRECTORY = "kvStore";
     private static final int[] REWRITE_INTERVALS_IN_SECONDS =
@@ -166,11 +165,10 @@ public class PopConsumerService extends ServiceThread {
 
     public PopConsumerContext handleGetMessageResult(PopConsumerContext context, GetMessageResult result,
         String topicId, int queueId, PopConsumerRecord.RetryType retryType, long offset) {
+
         if (GetMessageStatus.FOUND.equals(result.getStatus()) && !result.getMessageQueueOffset().isEmpty()) {
             if (context.isFifo()) {
                 this.setFifoBlocked(context, context.getGroupId(), topicId, queueId, result.getMessageQueueOffset(), result);
-                // System.out.println("顺序消息返回内容的数量: " + result.getMessageCount() + " 从这个 offset 拉取消息:" + offset + " message queue offset: " + result.getMessageQueueOffset());
-                log.info("顺序消息返回内容的数量: {} 从这个 offset 拉取消息:{} message queue offset: {}", result.getMessageCount(), offset, result.getMessageQueueOffset());
             }
             // build response header here
             context.addGetMessageResult(result, topicId, queueId, retryType, offset);
@@ -310,7 +308,6 @@ public class PopConsumerService extends ServiceThread {
                 return CompletableFuture.completedFuture(result);
             }
 
-            // TODO: 什么作用呢？
             int remain = batchSize - result.getMessageCount();
             if (remain <= 0) {
                 result.addRestCount(this.getPendingFilterCount(groupId, topicId, queueId));
@@ -319,21 +316,12 @@ public class PopConsumerService extends ServiceThread {
                 if (result.isFifo()) {
                     GetMessageResult cacheResult = getAvailableMessageResult(result.getAttemptId(), result.getPopTime(), result.getInvisibleTime(), groupId, topicId, queueId, batchSize, result.getOrderCountInfoBuilder());
                     if (cacheResult != null) { // 确保 GetMessageResult 拿到的消息是有消息体的
-                        brokerLogger.info("尝试直接从 cache 中取消息, groupId={}, topicId={}, queueId={}, batchSize={}, offset={}",
-                            groupId, topicId, queueId, batchSize, cacheResult.getMessageQueueOffset());
                         // 不走 store 读取消息，直接从 cache 中取消息
                         // 这里就不用再走 handleGetMessageResult 去预读和加锁了
                         // getMinOffset
                         final long consumeOffset = this.getPopOffset(groupId, topicId, queueId, result.getInitMode());
                         result.addGetMessageResult(cacheResult, topicId, queueId, retryType, consumeOffset);
-                        brokerLogger.info("从 cache 中获取的 Result: {}", cacheResult);
-                        for (int i = 0; i < cacheResult.getMessageBufferList().size(); i++) {
-                            brokerLogger.info("从 cache 中获取的 Result 的 bytebuffer 的可读字节: {}", cacheResult.getMessageBufferList().get(i).remaining());
-                        }
                         return CompletableFuture.completedFuture(result);
-                    } else {
-                        brokerLogger.info("从 store 取消息，cache 中没有消息, groupId={}, topicId={}, queueId={}, batchSize={}",
-                            groupId, topicId, queueId, batchSize);
                     }
                 }
 
@@ -367,7 +355,6 @@ public class PopConsumerService extends ServiceThread {
 
         TopicConfig topicConfig = brokerController.getTopicConfigManager().selectTopicConfig(topicId);
         if (topicConfig == null || !consumerLockService.tryLock(groupId, topicId)) {
-            log.info("pop 请求没有拿到锁，直接返回了");
             return CompletableFuture.completedFuture(popConsumerContext);
         }
 
@@ -588,16 +575,16 @@ public class PopConsumerService extends ServiceThread {
             upperTime : consumerRecords.get(consumerRecords.size() - 1).getVisibilityTimeout());
 
         if (brokerConfig.isEnablePopBufferMerge()) {
-//            log.info("PopConsumerService, key size={}, cache size={}, revive count={}, failure count={}, " +
-//                    "behindInMillis={}, scanInMillis={}, costInMillis={}",
-//                popConsumerCache.getCacheKeySize(), popConsumerCache.getCacheSize(),
-//                consumerRecords.size(), failureList.size(), upperTime - currentTime.get(),
-//                scanCostTime, stopwatch.elapsed(TimeUnit.MILLISECONDS));
+            log.info("PopConsumerService, key size={}, cache size={}, revive count={}, failure count={}, " +
+                    "behindInMillis={}, scanInMillis={}, costInMillis={}",
+                popConsumerCache.getCacheKeySize(), popConsumerCache.getCacheSize(),
+                consumerRecords.size(), failureList.size(), upperTime - currentTime.get(),
+                scanCostTime, stopwatch.elapsed(TimeUnit.MILLISECONDS));
         } else {
-//            log.info("PopConsumerService, revive count={}, failure count={}, " +
-//                    "behindInMillis={}, scanInMillis={}, costInMillis={}",
-//                consumerRecords.size(), failureList.size(), upperTime - currentTime.get(),
-//                scanCostTime, stopwatch.elapsed(TimeUnit.MILLISECONDS));
+            log.info("PopConsumerService, revive count={}, failure count={}, " +
+                    "behindInMillis={}, scanInMillis={}, costInMillis={}",
+                consumerRecords.size(), failureList.size(), upperTime - currentTime.get(),
+                scanCostTime, stopwatch.elapsed(TimeUnit.MILLISECONDS));
         }
 
         return consumerRecords.size();

@@ -39,7 +39,7 @@ public class PopConsumerContext {
 
     private final String attemptId;
 
-    // 客户端只托管 pop，不知道哪个 offset 开始拉
+    // 客户端只托管 pop，不知道从哪个 offset 开始拉
     // pending filter count
     private final AtomicLong restCount;
 
@@ -76,6 +76,7 @@ public class PopConsumerContext {
     // offset is consumer last request offset
     public void addGetMessageResult(GetMessageResult result,
         String topicId, int queueId, PopConsumerRecord.RetryType retryType, long offset) {
+
         if (result.getStatus() != GetMessageStatus.FOUND || result.getMessageQueueOffset().isEmpty()) {
             return;
         }
