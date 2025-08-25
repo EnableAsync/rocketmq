@@ -63,9 +63,10 @@ public class ShardingKeyLockManager {
             ConcurrentSkipListMap<Long/* offset */, String/* shardingKeyHash */>>> offsetToShardingKeyMap;
 
     /**
-     * attemptId集合，用于检查重复请求
+     * attemptId到shardingKey的映射，用于处理重复请求
+     * attemptId -> AttemptInfo(topic, group, queueId, shardingKey)
      */
-    private final Set<String> attemptIdSet;
+    private final ConcurrentHashMap<String/* attemptId */, AttemptInfo> attemptIdToShardingKeyMap;
 
     /**
      * 时间轮定时器，用于处理锁过期
@@ -97,7 +98,7 @@ public class ShardingKeyLockManager {
         this.cache = cache;
         this.shardingKeyLockMap = new ConcurrentHashMap<>(128);
         this.offsetToShardingKeyMap = new ConcurrentHashMap<>(128);
-        this.attemptIdSet = ConcurrentHashMap.newKeySet();
+        this.attemptIdToShardingKeyMap = new ConcurrentHashMap<>(1024);
         this.timeoutMap = new ConcurrentHashMap<>(1024);
         this.expiredShardingKeyCache = new ConcurrentHashMap<>(256);
 
@@ -146,7 +147,20 @@ public class ShardingKeyLockManager {
      */
     public boolean isLocked(String topic, String group, int queueId, String shardingKey, String attemptId) {
         // 检查attemptId是否重复
-        if (attemptId != null && attemptIdSet.contains(attemptId)) {
+        if (attemptId != null && attemptIdToShardingKeyMap.containsKey(attemptId)) {
+            // 重复的attemptId，需要处理之前的shardingKey锁
+            AttemptInfo previousAttemptInfo = attemptIdToShardingKeyMap.get(attemptId);
+            if (previousAttemptInfo != null) {
+                log.info("检测到重复attemptId: {}, 之前的shardingKey: {}, 当前shardingKey: {}",
+                    attemptId, previousAttemptInfo.shardingKey, shardingKey);
+
+                // 处理之前的shardingKey锁，让其消息变为可用
+                handleDuplicateAttemptId(previousAttemptInfo.topic, previousAttemptInfo.group,
+                    previousAttemptInfo.queueId, previousAttemptInfo.shardingKey);
+
+                // 更新映射为当前的shardingKey
+                attemptIdToShardingKeyMap.put(attemptId, new AttemptInfo(topic, group, queueId, shardingKey));
+            }
             return false; // 重复请求，不阻塞
         }
 
@@ -195,9 +209,9 @@ public class ShardingKeyLockManager {
 //      测试时 hash 用明文
         String shardingKeyHash = shardingKey;
 
-        // 记录attemptId
+        // 记录attemptId到shardingKey的映射
         if (attemptId != null) {
-            attemptIdSet.add(attemptId);
+            attemptIdToShardingKeyMap.put(attemptId, new AttemptInfo(topic, group, queueId, shardingKeyHash));
         }
 
         // 获取或创建三级Map结构
@@ -576,9 +590,9 @@ public class ShardingKeyLockManager {
     public void cleanExpiredAttemptIds() {
         // 简单实现：定期清理所有attemptId
         // 实际实现中可以考虑基于时间的过期策略
-        if (attemptIdSet.size() > 10000) {
-            attemptIdSet.clear();
-            log.info("Cleared attempt ID set due to size limit");
+        if (attemptIdToShardingKeyMap.size() > 10000) {
+            attemptIdToShardingKeyMap.clear();
+            log.info("Cleared attempt ID mapping due to size limit");
         }
     }
 
@@ -598,7 +612,7 @@ public class ShardingKeyLockManager {
         }
 
         return String.format("ShardingKeyLockManager stats: groups=%d, queues=%d, locks=%d, attemptIds=%d",
-            totalGroups, totalQueues, totalLocks, attemptIdSet.size());
+            totalGroups, totalQueues, totalLocks, attemptIdToShardingKeyMap.size());
     }
 
     /**
@@ -717,6 +731,77 @@ public class ShardingKeyLockManager {
                 retryStorage.getCacheSize(), retryStorage.isStarted());
         } else {
             return "RetryStorage: disabled";
+        }
+    }
+
+    /**
+     * 处理重复attemptId的情况
+     * 与handleExpiredLock类似，将之前shardingKey的消息放入可用缓存
+     */
+    private void handleDuplicateAttemptId(String topic, String group, int queueId, String shardingKeyHash) {
+        ShardingKeyLock lock = getLock(topic, group, queueId, shardingKeyHash);
+        if (lock == null) {
+            log.warn("处理重复attemptId时，shardingKey的锁已经不存在: {}", shardingKeyHash);
+            return;
+        }
+
+        Set<Long> offsets = lock.getOffsetSet();
+        if (offsets.isEmpty()) {
+            log.warn("处理重复attemptId时，shardingKey无offset: {}", shardingKeyHash);
+            return;
+        }
+
+        log.info("处理重复attemptId，将shardingKey的消息放入可用缓存: {}, offsets: {}", shardingKeyHash, offsets);
+
+        // 创建GetMessageResult，与handleExpiredLock一样处理
+        GetMessageResult result = new GetMessageResult();
+        result.setStatus(GetMessageStatus.FOUND);
+        cache.addAvailableMessage(topic, group, queueId, shardingKeyHash, result, new ArrayList<>(offsets));
+
+        // 清除该shardingKey的锁
+        String topicGroupKey = MessageShardingKeyUtil.buildTopicGroupIdentifier(topic, group);
+        ConcurrentHashMap<Integer, ConcurrentHashMap<String, ShardingKeyLock>> queueMap = shardingKeyLockMap.get(topicGroupKey);
+        if (queueMap != null) {
+            ConcurrentHashMap<String, ShardingKeyLock> shardingKeyMap = queueMap.get(queueId);
+            if (shardingKeyMap != null) {
+                shardingKeyMap.remove(shardingKeyHash);
+
+                // 取消定时任务
+                cancelExpireTask(topic, group, queueId, shardingKeyHash);
+
+                // 清理持久化的重试次数记录
+                retryStorage.removeRetryTimes(topic, group, queueId, shardingKeyHash);
+
+                log.info("清理重复attemptId对应的shardingKey锁: {}", shardingKeyHash);
+            }
+        }
+
+        // 唤醒长轮询
+        if (brokerController.getBrokerConfig().isEnableNotifyAfterPopOrderLockRelease()) {
+            notifyLongPolling(topic, group, ALL_QUEUES);
+        }
+    }
+
+    /**
+     * AttemptInfo内部类，用于存储attemptId对应的信息
+     */
+    private static class AttemptInfo {
+        final String topic;
+        final String group;
+        final int queueId;
+        final String shardingKey;
+
+        AttemptInfo(String topic, String group, int queueId, String shardingKey) {
+            this.topic = topic;
+            this.group = group;
+            this.queueId = queueId;
+            this.shardingKey = shardingKey;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("AttemptInfo{topic='%s', group='%s', queueId=%d, shardingKey='%s'}",
+                topic, group, queueId, shardingKey);
         }
     }
 }

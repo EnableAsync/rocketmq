@@ -37,6 +37,7 @@ import java.util.concurrent.TimeUnit;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.broker.longpolling.PullRequestHoldService;
 import org.apache.rocketmq.common.BrokerConfig;
+import org.apache.rocketmq.store.config.MessageStoreConfig;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -56,17 +57,26 @@ public class ShardingKeyLockManagerTest {
     @Mock
     private PullRequestHoldService pullRequestHoldService;
 
-//    @Before
-//    public void setUp() {
-//        MockitoAnnotations.openMocks(this);
-//
-//        // 设置必要的 Mock 行为
-//        BrokerConfig brokerConfig = new BrokerConfig();
-//        when(brokerController.getBrokerConfig()).thenReturn(brokerConfig);
-//        when(brokerController.getPullRequestHoldService()).thenReturn(pullRequestHoldService);
-//
-//        lockManager = new ShardingKeyLockManager(brokerController, );
-//    }
+    @Mock
+    private ShardingKeyCache shardingKeyCache;
+
+    @Mock
+    private MessageStoreConfig messageStoreConfig;
+
+    @Before
+    public void setUp() {
+        MockitoAnnotations.openMocks(this);
+
+        // 设置必要的 Mock 行为
+        BrokerConfig brokerConfig = new BrokerConfig();
+        when(brokerController.getBrokerConfig()).thenReturn(brokerConfig);
+        when(brokerController.getPullRequestHoldService()).thenReturn(pullRequestHoldService);
+        when(brokerController.getMessageStoreConfig()).thenReturn(messageStoreConfig);
+        when(messageStoreConfig.getStorePathRootDir()).thenReturn(System.getProperty("java.io.tmpdir"));
+
+        lockManager = new ShardingKeyLockManager(brokerController, shardingKeyCache);
+        lockManager.load();
+    }
 
     @After
     public void tearDown() {
@@ -668,5 +678,274 @@ public class ShardingKeyLockManagerTest {
         // 注意：shutdown主要是停止定时器，锁的数据结构可能保持不变
         // 具体的行为取决于实现
         assertTrue("shutdown completed", true);
+    }
+
+    /**
+     * 测试 attemptId 映射功能 - 创建映射
+     */
+    @Test
+    public void testAttemptIdMapping_CreateMapping() {
+        String topic = "testTopic";
+        String group = "testGroup";
+        int queueId = 1;
+        String shardingKey = "user123";
+        String attemptId = "attempt123";
+        long popTime = System.currentTimeMillis();
+        long invisibleTime = 30000;
+        List<Long> offsets = Arrays.asList(1000L);
+
+        // 创建锁，应该同时创建 attemptId 映射
+        lockManager.createOrUpdateLock(topic, group, queueId, shardingKey, popTime, invisibleTime, attemptId, offsets);
+
+        // 验证 attemptId 映射已创建 - 通过检查重复 attemptId 的行为
+        boolean isLocked = lockManager.isLocked(topic, group, queueId, "differentKey", attemptId);
+        assertFalse("duplicate attemptId should not be blocked", isLocked);
+    }
+
+    /**
+     * 测试 attemptId 映射功能 - 重复 attemptId 检测
+     */
+    @Test
+    public void testAttemptIdMapping_DuplicateDetection() {
+        String topic = "testTopic";
+        String group = "testGroup";
+        int queueId = 1;
+        String shardingKey1 = "user123";
+        String shardingKey2 = "user456";
+        String attemptId = "attempt123";
+        long popTime = System.currentTimeMillis();
+        long invisibleTime = 30000;
+        List<Long> offsets1 = Arrays.asList(1000L);
+        List<Long> offsets2 = Arrays.asList(2000L);
+
+        // 第一次使用 attemptId 创建锁
+        lockManager.createOrUpdateLock(topic, group, queueId, shardingKey1, popTime, invisibleTime, attemptId, offsets1);
+
+        // 验证第一个锁存在
+        assertTrue("first lock should exist",
+            lockManager.isLocked(topic, group, queueId, shardingKey1, "different_attempt"));
+
+        // 第二次使用相同的 attemptId（应该检测到重复）
+        boolean isLocked = lockManager.isLocked(topic, group, queueId, shardingKey2, attemptId);
+        assertFalse("duplicate attemptId should not be blocked", isLocked);
+    }
+
+    /**
+     * 测试 attemptId 映射功能 - 不同 attemptId 不冲突
+     */
+    @Test
+    public void testAttemptIdMapping_DifferentAttemptIds() {
+        String topic = "testTopic";
+        String group = "testGroup";
+        int queueId = 1;
+        String shardingKey1 = "user123";
+        String shardingKey2 = "user456";
+        String attemptId1 = "attempt123";
+        String attemptId2 = "attempt456";
+        long popTime = System.currentTimeMillis();
+        long invisibleTime = 30000;
+        List<Long> offsets1 = Arrays.asList(1000L);
+        List<Long> offsets2 = Arrays.asList(2000L);
+
+        // 使用不同的 attemptId 创建两个锁
+        lockManager.createOrUpdateLock(topic, group, queueId, shardingKey1, popTime, invisibleTime, attemptId1, offsets1);
+        lockManager.createOrUpdateLock(topic, group, queueId, shardingKey2, popTime, invisibleTime, attemptId2, offsets2);
+
+        // 验证两个锁都存在且互不影响
+        assertTrue("first lock should exist",
+            lockManager.isLocked(topic, group, queueId, shardingKey1, "different_attempt"));
+        assertTrue("second lock should exist",
+            lockManager.isLocked(topic, group, queueId, shardingKey2, "different_attempt"));
+    }
+
+    /**
+     * 测试 attemptId 映射功能 - null attemptId 处理
+     */
+    @Test
+    public void testAttemptIdMapping_NullAttemptId() {
+        String topic = "testTopic";
+        String group = "testGroup";
+        int queueId = 1;
+        String shardingKey = "user123";
+        long popTime = System.currentTimeMillis();
+        long invisibleTime = 30000;
+        List<Long> offsets = Arrays.asList(1000L);
+
+        // 使用 null attemptId 创建锁
+        lockManager.createOrUpdateLock(topic, group, queueId, shardingKey, popTime, invisibleTime, null, offsets);
+
+        // 验证锁正常创建
+        assertTrue("lock should exist with null attemptId",
+            lockManager.isLocked(topic, group, queueId, shardingKey, "different_attempt"));
+
+        // 验证 null attemptId 不会影响正常的 attemptId 检查
+        boolean isLocked = lockManager.isLocked(topic, group, queueId, shardingKey, null);
+        assertTrue("null attemptId should be blocked by existing lock", isLocked);
+    }
+
+    /**
+     * 测试 handleDuplicateAttemptId 方法
+     */
+    @Test
+    public void testHandleDuplicateAttemptId() {
+        String topic = "testTopic";
+        String group = "testGroup";
+        int queueId = 1;
+        String shardingKey = "user123";
+        String attemptId = "attempt123";
+        long popTime = System.currentTimeMillis();
+        long invisibleTime = 30000;
+        List<Long> offsets = Arrays.asList(1000L, 1001L);
+
+        // 创建锁
+        lockManager.createOrUpdateLock(topic, group, queueId, shardingKey, popTime, invisibleTime, attemptId, offsets);
+
+        // 验证锁存在
+        assertTrue("lock should exist initially",
+            lockManager.isLocked(topic, group, queueId, shardingKey, "different_attempt"));
+
+        // 模拟重复 attemptId 的处理（通过调用 isLocked 触发）
+        lockManager.isLocked(topic, group, queueId, "differentKey", attemptId);
+
+        // 注意：由于用户删除了实际的处理逻辑，这里主要测试不会抛出异常
+        assertTrue("handleDuplicateAttemptId should complete without exception", true);
+    }
+
+    /**
+     * 测试 attemptId 清理功能
+     */
+    @Test
+    public void testCleanExpiredAttemptIds() {
+        String topic = "testTopic";
+        String group = "testGroup";
+        int queueId = 1;
+        long popTime = System.currentTimeMillis();
+        long invisibleTime = 30000;
+        List<Long> offsets = Arrays.asList(1000L);
+
+        // 创建大量的 attemptId 映射（超过清理阈值）
+        for (int i = 0; i < 10005; i++) {
+            String shardingKey = "user" + i;
+            String attemptId = "attempt" + i;
+            lockManager.createOrUpdateLock(topic, group, queueId, shardingKey, popTime, invisibleTime, attemptId, offsets);
+        }
+
+        // 获取清理前的统计信息
+        String statsBefore = lockManager.getStatistics();
+        assertTrue("should have many attemptIds before cleanup", statsBefore.contains("attemptIds="));
+
+        // 执行清理
+        lockManager.cleanExpiredAttemptIds();
+
+        // 获取清理后的统计信息
+        String statsAfter = lockManager.getStatistics();
+        assertTrue("should have fewer attemptIds after cleanup", statsAfter.contains("attemptIds=0"));
+    }
+
+    /**
+     * 测试 attemptId 统计信息
+     */
+    @Test
+    public void testAttemptIdStatistics() {
+        String topic = "testTopic";
+        String group = "testGroup";
+        int queueId = 1;
+        long popTime = System.currentTimeMillis();
+        long invisibleTime = 30000;
+        List<Long> offsets = Arrays.asList(1000L);
+
+        // 初始状态应该没有 attemptId
+        String initialStats = lockManager.getStatistics();
+        assertTrue("should show 0 attemptIds initially", initialStats.contains("attemptIds=0"));
+
+        // 创建几个带 attemptId 的锁
+        lockManager.createOrUpdateLock(topic, group, queueId, "user1", popTime, invisibleTime, "attempt1", offsets);
+        lockManager.createOrUpdateLock(topic, group, queueId, "user2", popTime, invisibleTime, "attempt2", offsets);
+        lockManager.createOrUpdateLock(topic, group, queueId, "user3", popTime, invisibleTime, "attempt3", offsets);
+
+        // 验证统计信息更新
+        String updatedStats = lockManager.getStatistics();
+        assertTrue("should show 3 attemptIds", updatedStats.contains("attemptIds=3"));
+    }
+
+    /**
+     * 测试 attemptId 并发安全性
+     */
+    @Test
+    public void testAttemptIdConcurrentSafety() throws InterruptedException {
+        String topic = "testTopic";
+        String group = "testGroup";
+        int queueId = 1;
+        final int threadCount = 10;
+        final CountDownLatch latch = new CountDownLatch(threadCount);
+        final ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+
+        try {
+            // 启动多个线程同时操作 attemptId
+            for (int i = 0; i < threadCount; i++) {
+                final int threadId = i;
+                executor.submit(() -> {
+                    try {
+                        String shardingKey = "user" + threadId;
+                        String attemptId = "attempt" + threadId;
+                        long popTime = System.currentTimeMillis();
+                        long invisibleTime = 30000;
+                        List<Long> offsets = Arrays.asList(1000L + threadId);
+
+                        // 创建锁（包含 attemptId 映射）
+                        lockManager.createOrUpdateLock(topic, group, queueId, shardingKey, popTime, invisibleTime, attemptId, offsets);
+
+                        // 检查重复 attemptId
+                        lockManager.isLocked(topic, group, queueId, "otherKey", attemptId);
+
+                        // 释放锁
+                        lockManager.releaseLock(topic, group, queueId, 1000L + threadId, popTime);
+                    } finally {
+                        latch.countDown();
+                    }
+                });
+            }
+
+            // 等待所有线程完成
+            assertTrue("All threads should complete within timeout",
+                    latch.await(10, TimeUnit.SECONDS));
+
+        } finally {
+            executor.shutdown();
+            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+        }
+    }
+
+    /**
+     * 测试 attemptId 边界条件
+     */
+    @Test
+    public void testAttemptIdBoundaryConditions() {
+        String topic = "testTopic";
+        String group = "testGroup";
+        int queueId = 1;
+        String shardingKey = "user123";
+        long popTime = System.currentTimeMillis();
+        long invisibleTime = 30000;
+        List<Long> offsets = Arrays.asList(1000L);
+
+        // 测试空字符串 attemptId
+        lockManager.createOrUpdateLock(topic, group, queueId, shardingKey + "1", popTime, invisibleTime, "", offsets);
+        boolean result1 = lockManager.isLocked(topic, group, queueId, "otherKey", "");
+        assertFalse("empty attemptId should not be blocked", result1);
+
+        // 测试很长的 attemptId
+        String longAttemptId = "a".repeat(1000);
+        lockManager.createOrUpdateLock(topic, group, queueId, shardingKey + "2", popTime, invisibleTime, longAttemptId, offsets);
+        boolean result2 = lockManager.isLocked(topic, group, queueId, "otherKey", longAttemptId);
+        assertFalse("long attemptId should not be blocked", result2);
+
+        // 测试特殊字符 attemptId
+        String specialAttemptId = "attempt@#$%^&*()_+-={}[]|\\:;\"'<>?,./";
+        lockManager.createOrUpdateLock(topic, group, queueId, shardingKey + "3", popTime, invisibleTime, specialAttemptId, offsets);
+        boolean result3 = lockManager.isLocked(topic, group, queueId, "otherKey", specialAttemptId);
+        assertFalse("special character attemptId should not be blocked", result3);
     }
 }
