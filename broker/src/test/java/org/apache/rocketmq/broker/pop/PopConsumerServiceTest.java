@@ -35,7 +35,7 @@ import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.broker.failover.EscapeBridge;
 import org.apache.rocketmq.broker.longpolling.PopLongPollingService;
 import org.apache.rocketmq.broker.offset.ConsumerOffsetManager;
-import org.apache.rocketmq.broker.offset.order.FIFOConsumptionManager;
+import org.apache.rocketmq.broker.offset.order.OrderlyConsumptionManager;
 import org.apache.rocketmq.broker.processor.PopMessageProcessor;
 import org.apache.rocketmq.broker.topic.TopicConfigManager;
 import org.apache.rocketmq.common.BrokerConfig;
@@ -96,7 +96,7 @@ public class PopConsumerServiceTest {
         ConsumerOffsetManager consumerOffsetManager = Mockito.mock(ConsumerOffsetManager.class);
         PopMessageProcessor popMessageProcessor = Mockito.mock(PopMessageProcessor.class);
         PopLongPollingService popLongPollingService = Mockito.mock(PopLongPollingService.class);
-        FIFOConsumptionManager FIFOConsumptionManager = Mockito.mock(FIFOConsumptionManager.class);
+        OrderlyConsumptionManager OrderlyConsumptionManager = Mockito.mock(OrderlyConsumptionManager.class);
 
         brokerController = Mockito.mock(BrokerController.class);
         Mockito.when(brokerController.getBrokerConfig()).thenReturn(brokerConfig);
@@ -105,7 +105,7 @@ public class PopConsumerServiceTest {
         Mockito.when(brokerController.getConsumerOffsetManager()).thenReturn(consumerOffsetManager);
         Mockito.when(brokerController.getPopMessageProcessor()).thenReturn(popMessageProcessor);
         Mockito.when(popMessageProcessor.getPopLongPollingService()).thenReturn(popLongPollingService);
-        Mockito.when(brokerController.getConsumerOrderInfoManager()).thenReturn(FIFOConsumptionManager);
+        Mockito.when(brokerController.getConsumerOrderInfoManager()).thenReturn(OrderlyConsumptionManager);
 
         consumerService = new PopConsumerService(brokerController);
     }

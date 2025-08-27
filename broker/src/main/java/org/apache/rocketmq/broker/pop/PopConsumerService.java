@@ -293,6 +293,7 @@ public class PopConsumerService extends ServiceThread {
             context.getAttemptId(), topicId, groupId, queueId, context.getInvisibleTime());
     }
 
+    // TODO: 改成全异步的
     public GetMessageResult getAvailableMessageResult(String attemptId, long popTime, long invisibleTime,
         String groupId, String topicId, int queueId, int batchSize, StringBuilder orderCountInfoBuilder) {
         return brokerController.getConsumerOrderInfoManager().getAvailableMessageResult(attemptId, popTime, invisibleTime, topicId, groupId, queueId, batchSize, orderCountInfoBuilder);

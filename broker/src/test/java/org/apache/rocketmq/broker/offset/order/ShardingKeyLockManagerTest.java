@@ -193,122 +193,6 @@ public class ShardingKeyLockManagerTest {
     }
 
     /**
-     * 测试 filterMessagesByLock 方法 - 正常情况
-     */
-//    @Test
-//    public void testFilterMessagesByLock_Normal() {
-//        String topic = "testTopic";
-//        String group = "testGroup";
-//        int queueId = 1;
-//        String attemptId = "attempt123";
-//
-//        // 创建消息分片信息
-//        MessageShardingKeyUtil.MessageShardingInfo shardingInfo = new MessageShardingKeyUtil.MessageShardingInfo();
-//        shardingInfo.addMessage(1000L, "user123", 0);
-//        shardingInfo.addMessage(1001L, "user456", 1);
-//        shardingInfo.addMessage(1002L, "user123", 2);
-//
-//        // 为user123创建锁
-//        lockManager.createOrUpdateLock(topic, group, queueId, "user123",
-//                System.currentTimeMillis(), 30000, "attempt123", Arrays.asList(1000L, 1002L));
-//
-//        // 过滤消息
-//        MessageShardingKeyUtil.MessageFilterResult result = lockManager.filterMessagesByLock(
-//                topic, group, queueId, attemptId, shardingInfo);
-//
-//        assertNotNull("filter result should not be null", result);
-//
-//        // 验证可用消息（未被锁定的）
-//        Map<String, List<MessageShardingKeyUtil.MessageInfo>> availableMessages =
-//                result.getAvailableMessagesByShardingKey();
-//        assertTrue("should have available messages for user456", availableMessages.containsKey("user456"));
-//        assertEquals("should have 1 available message for user456", 1, availableMessages.get("user456").size());
-//
-//        // 验证阻塞消息（被锁定的）
-//        Map<String, List<MessageShardingKeyUtil.MessageInfo>> blockedMessages =
-//                result.getBlockedMessagesByShardingKey();
-//        assertTrue("should have blocked messages for user123", blockedMessages.containsKey("user123"));
-//        assertEquals("should have 2 blocked messages for user123", 2, blockedMessages.get("user123").size());
-//    }
-
-    /**
-     * 测试 filterMessagesByLock 方法 - 所有消息都可用
-     */
-//    @Test
-//    public void testFilterMessagesByLock_AllAvailable() {
-//        String topic = "testTopic";
-//        String group = "testGroup";
-//        int queueId = 1;
-//        String attemptId = "attempt123";
-//
-//        // 创建消息分片信息
-//        MessageShardingKeyUtil.MessageShardingInfo shardingInfo = new MessageShardingKeyUtil.MessageShardingInfo();
-//        shardingInfo.addMessage(1000L, "user123", 0);
-//        shardingInfo.addMessage(1001L, "user456", 1);
-//        shardingInfo.addMessage(1002L, "user789", 2);
-//
-//        // 不创建任何锁
-//
-//        // 过滤消息
-//        MessageShardingKeyUtil.MessageFilterResult result = lockManager.filterMessagesByLock(
-//                topic, group, queueId, attemptId, shardingInfo);
-//
-//        assertNotNull("filter result should not be null", result);
-//
-//        // 验证所有消息都可用
-//        Map<String, List<MessageShardingKeyUtil.MessageInfo>> availableMessages =
-//                result.getAvailableMessagesByShardingKey();
-//        assertEquals("should have 3 available sharding keys", 3, availableMessages.size());
-//        assertTrue("should have available messages for user123", availableMessages.containsKey("user123"));
-//        assertTrue("should have available messages for user456", availableMessages.containsKey("user456"));
-//        assertTrue("should have available messages for user789", availableMessages.containsKey("user789"));
-//
-//        // 验证没有阻塞消息
-//        Map<String, List<MessageShardingKeyUtil.MessageInfo>> blockedMessages =
-//                result.getBlockedMessagesByShardingKey();
-//        assertTrue("should have no blocked messages", blockedMessages.isEmpty());
-//    }
-
-    /**
-     * 测试 filterMessagesByLock 方法 - 所有消息都被阻塞
-     */
-//    @Test
-//    public void testFilterMessagesByLock_AllBlocked() {
-//        String topic = "testTopic";
-//        String group = "testGroup";
-//        int queueId = 1;
-//        String attemptId = "attempt123";
-//
-//        // 创建消息分片信息
-//        MessageShardingKeyUtil.MessageShardingInfo shardingInfo = new MessageShardingKeyUtil.MessageShardingInfo();
-//        shardingInfo.addMessage(1000L, "user123", 0);
-//        shardingInfo.addMessage(1001L, "user456", 1);
-//        shardingInfo.addMessage(1002L, "user789", 2);
-//
-//        // 为所有sharding key创建锁
-//        long currentTime = System.currentTimeMillis();
-//        lockManager.createOrUpdateLock(topic, group, queueId, "user123", currentTime, 30000, "attempt123", Arrays.asList(1000L));
-//        lockManager.createOrUpdateLock(topic, group, queueId, "user456", currentTime, 30000, "attempt456", Arrays.asList(1001L));
-//        lockManager.createOrUpdateLock(topic, group, queueId, "user789", currentTime, 30000, "attempt789", Arrays.asList(1002L));
-//
-//        // 过滤消息
-//        MessageShardingKeyUtil.MessageFilterResult result = lockManager.filterMessagesByLock(
-//                topic, group, queueId, "different_attempt", shardingInfo);
-//
-//        assertNotNull("filter result should not be null", result);
-//
-//        // 验证没有可用消息
-//        Map<String, List<MessageShardingKeyUtil.MessageInfo>> availableMessages =
-//                result.getAvailableMessagesByShardingKey();
-//        assertTrue("should have no available messages", availableMessages.isEmpty());
-//
-//        // 验证所有消息都被阻塞
-//        Map<String, List<MessageShardingKeyUtil.MessageInfo>> blockedMessages =
-//                result.getBlockedMessagesByShardingKey();
-//        assertEquals("should have 3 blocked sharding keys", 3, blockedMessages.size());
-//    }
-
-    /**
      * 测试 releaseLock 方法 - 释放单个offset
      */
     @Test
@@ -833,9 +717,6 @@ public class ShardingKeyLockManagerTest {
         // 获取清理前的统计信息
         String statsBefore = lockManager.getStatistics();
         assertTrue("should have many attemptIds before cleanup", statsBefore.contains("attemptIds="));
-
-        // 执行清理
-        lockManager.cleanExpiredAttemptIds();
 
         // 获取清理后的统计信息
         String statsAfter = lockManager.getStatistics();

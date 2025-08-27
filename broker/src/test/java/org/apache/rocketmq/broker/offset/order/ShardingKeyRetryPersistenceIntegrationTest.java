@@ -103,9 +103,9 @@ public class ShardingKeyRetryPersistenceIntegrationTest {
             popTime, invisibleTime, attemptId, offsets);
 
         // 2. 增加重试次数（应该持久化到存储）
-        lockManager.increaseCountInfo(topic, group, queueId, shardingKey, offsets);
-        lockManager.increaseCountInfo(topic, group, queueId, shardingKey, offsets);
-        lockManager.increaseCountInfo(topic, group, queueId, shardingKey, offsets);
+        lockManager.increaseRetryTimes(topic, group, queueId, shardingKey, offsets);
+        lockManager.increaseRetryTimes(topic, group, queueId, shardingKey, offsets);
+        lockManager.increaseRetryTimes(topic, group, queueId, shardingKey, offsets);
 
         // 3. 验证统计信息包含重试次数存储信息
         String retryStorageStats = lockManager.getRetryStorageStatistics();
@@ -140,11 +140,11 @@ public class ShardingKeyRetryPersistenceIntegrationTest {
         lockManager.createOrUpdateLock(topic, group, queueId, shardingKey, 
             popTime, invisibleTime, attemptId, offsets);
         
-        lockManager.increaseCountInfo(topic, group, queueId, shardingKey, offsets);
-        lockManager.increaseCountInfo(topic, group, queueId, shardingKey, offsets);
-        lockManager.increaseCountInfo(topic, group, queueId, shardingKey, offsets);
-        lockManager.increaseCountInfo(topic, group, queueId, shardingKey, offsets);
-        lockManager.increaseCountInfo(topic, group, queueId, shardingKey, offsets);
+        lockManager.increaseRetryTimes(topic, group, queueId, shardingKey, offsets);
+        lockManager.increaseRetryTimes(topic, group, queueId, shardingKey, offsets);
+        lockManager.increaseRetryTimes(topic, group, queueId, shardingKey, offsets);
+        lockManager.increaseRetryTimes(topic, group, queueId, shardingKey, offsets);
+        lockManager.increaseRetryTimes(topic, group, queueId, shardingKey, offsets);
 
         // 2. 关闭锁管理器
         lockManager.shutdown();
@@ -184,7 +184,7 @@ public class ShardingKeyRetryPersistenceIntegrationTest {
 
             // 为每个 shardingKey 增加不同次数的重试
             for (int j = 0; j <= i; j++) {
-                lockManager.increaseCountInfo(topic, group, queueId, shardingKey, offsets);
+                lockManager.increaseRetryTimes(topic, group, queueId, shardingKey, offsets);
             }
         }
 
@@ -222,7 +222,7 @@ public class ShardingKeyRetryPersistenceIntegrationTest {
             lockManager.isLocked(topic, group, queueId, shardingKey, "different_attempt"));
 
         // 增加重试次数（即使持久化失败，操作也应该成功）
-        lockManager.increaseCountInfo(topic, group, queueId, shardingKey, offsets);
+        lockManager.increaseRetryTimes(topic, group, queueId, shardingKey, offsets);
 
         // 释放锁（即使持久化清理失败，锁释放也应该成功）
         boolean released = lockManager.releaseLock(topic, group, queueId, 4000L, popTime);

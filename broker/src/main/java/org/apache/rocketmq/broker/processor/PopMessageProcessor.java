@@ -102,7 +102,6 @@ import static org.apache.rocketmq.remoting.metrics.RemotingMetricsConstant.LABEL
 public class PopMessageProcessor implements NettyRequestProcessor {
 
     private static final Logger POP_LOGGER = LoggerFactory.getLogger(LoggerName.ROCKETMQ_POP_LOGGER_NAME);
-    private static final Logger log = LoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
     private static final String BORN_TIME = "bornTime";
 
     private final BrokerController brokerController;
@@ -220,8 +219,6 @@ public class PopMessageProcessor implements NettyRequestProcessor {
     @Override
     public RemotingCommand processRequest(final ChannelHandlerContext ctx, RemotingCommand request)
         throws RemotingCommandException {
-        log.info("收到了 pop 请求: reqId={}", request.getOpaque());
-
         final long beginTimeMills = this.brokerController.getMessageStore().now();
 
         // fill bron time to properties if not exist, why we need this?
@@ -401,10 +398,8 @@ public class PopMessageProcessor implements NettyRequestProcessor {
                 if (result.isFound()) {
                     response.setCode(ResponseCode.SUCCESS);
                     getMessageResult.setStatus(GetMessageStatus.FOUND);
-                    log.info("pop 请求找到消息，不挂起请求, popTime={}, restCount={}", result.getPopTime(), result.getRestCount());
                     // recursive processing
                     if (result.getRestCount() > 0) {
-                        log.info("Found 的情况下长轮询唤醒成功，RestCount={}", result.getRestCount());
                         popLongPollingService.notifyMessageArriving(
                             requestHeader.getTopic(), requestHeader.getQueueId(), requestHeader.getConsumerGroup(),
                             null, 0L, null, null);
@@ -412,15 +407,12 @@ public class PopMessageProcessor implements NettyRequestProcessor {
                 } else {
                     POP_LOGGER.debug("Processor not found, polling request, popTime={}, restCount={}",
                         result.getPopTime(), result.getRestCount());
-                    log.info("pop 请求没有找到消息，挂起请求, popTime={}, restCount={}", result.getPopTime(), result.getRestCount());
                     PollingResult pollingResult = popLongPollingService.polling(
                         ctx, request, new PollingHeader(requestHeader), finalSubscriptionData, finalMessageFilter);
 
                     if (PollingResult.POLLING_SUC == pollingResult) {
-                        log.info("polling 成功挂起了长轮询");
                         // recursive processing
                         if (result.getRestCount() > 0) {
-                            log.info("非 Found 情况下长轮询唤醒成功，RestCount={}", result.getRestCount());
                             popLongPollingService.notifyMessageArriving(
                                 requestHeader.getTopic(), requestHeader.getQueueId(), requestHeader.getConsumerGroup(),
                                 null, 0L, null, null);

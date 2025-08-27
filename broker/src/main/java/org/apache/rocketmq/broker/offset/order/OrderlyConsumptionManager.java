@@ -21,14 +21,14 @@ import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.common.OrderedConsumptionLevel;
 import org.apache.rocketmq.store.GetMessageResult;
 
-public class FIFOConsumptionManager {
+public class OrderlyConsumptionManager {
     private final OrderedConsumptionManager orderedConsumptionManager;
 
-    public FIFOConsumptionManager() {
+    public OrderlyConsumptionManager() {
         this.orderedConsumptionManager = new QueueLevelConsumerManager();
     }
 
-    public FIFOConsumptionManager(BrokerController brokerController) {
+    public OrderlyConsumptionManager(BrokerController brokerController) {
         if (brokerController.getBrokerConfig().getOrderedConsumptionLevel() == OrderedConsumptionLevel.SHARDING_KEY) {
             System.out.println("使用 shardingKey 级别的顺序消费");
             this.orderedConsumptionManager = new ShardingKeyLevelConsumerManager(brokerController);

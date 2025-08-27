@@ -28,8 +28,7 @@ import org.apache.rocketmq.common.message.MessageConst;
 import org.apache.rocketmq.common.message.MessageDecoder;
 import org.apache.rocketmq.logging.org.slf4j.Logger;
 import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
-import org.apache.rocketmq.store.GetMessageResult;
-import org.apache.rocketmq.store.SelectMappedBufferResult;
+import org.apache.rocketmq.tieredstore.util.MessageFormatUtil;
 
 /**
  * 消息 Sharding Key 提取和处理工具类
@@ -45,37 +44,6 @@ public class MessageShardingKeyUtil {
     public static final String DEFAULT_SHARDING_KEY = "__DEFAULT_SHARDING_KEY__";
 
     /**
-     * 从 GetMessageResult 中提取 sharding key 信息
-     *
-     * @param getMessageResult 消息结果
-     * @return MessageShardingInfo 包含 sharding key 分组信息
-     */
-    public static MessageShardingInfo extractShardingKeyInfo(GetMessageResult getMessageResult) {
-        MessageShardingInfo shardingInfo = new MessageShardingInfo();
-
-        if (getMessageResult == null || getMessageResult.getMessageMapedList() == null) {
-            return shardingInfo;
-        }
-
-        List<SelectMappedBufferResult> messageMapedList = getMessageResult.getMessageMapedList();
-        List<Long> messageQueueOffsetList = getMessageResult.getMessageQueueOffset();
-
-        for (int i = 0; i < messageMapedList.size(); i++) {
-            SelectMappedBufferResult mappedBuffer = messageMapedList.get(i);
-            Long offset = i < messageQueueOffsetList.size() ? messageQueueOffsetList.get(i) : -1L;
-
-            String shardingKey = extractShardingKeyFromMappedBuffer(mappedBuffer);
-            shardingInfo.addMessage(offset, shardingKey, i);
-        }
-
-        return shardingInfo;
-    }
-
-    public static String extractShardingKeyHashFromBuffer(ByteBuffer byteBuffer) {
-        return calculateHashKey(extractShardingKeyFromBuffer(byteBuffer));
-    }
-
-    /**
      * 从 ByteBuffer 中提取 sharding key
      *
      * @param byteBuffer 消息缓冲区
@@ -87,41 +55,7 @@ public class MessageShardingKeyUtil {
         }
 
         try {
-            // 使用 decodeProperties 直接解析属性
-            Map<String, String> properties = MessageDecoder.decodeProperties(byteBuffer);
-            byteBuffer.rewind();
-
-            if (properties != null) {
-                String shardingKey = properties.get(MessageConst.PROPERTY_SHARDING_KEY);
-                return shardingKey != null ? shardingKey : DEFAULT_SHARDING_KEY;
-            }
-        } catch (Exception e) {
-            log.warn("Failed to decode properties for sharding key extraction", e);
-        }
-
-        return DEFAULT_SHARDING_KEY;
-    }
-
-    /**
-     * 从 SelectMappedBufferResult 中提取 sharding key
-     *
-     * @param mappedBuffer 消息缓冲区
-     * @return sharding key，如果没有则返回默认值
-     */
-    public static String extractShardingKeyFromMappedBuffer(SelectMappedBufferResult mappedBuffer) {
-        if (mappedBuffer == null) {
-            return DEFAULT_SHARDING_KEY;
-        }
-
-        try {
-            ByteBuffer byteBuffer = mappedBuffer.getByteBuffer();
-            if (byteBuffer == null) {
-                return DEFAULT_SHARDING_KEY;
-            }
-
-            // 使用 decodeProperties 直接解析属性
-            Map<String, String> properties = MessageDecoder.decodeProperties(byteBuffer);
-            byteBuffer.rewind();
+            Map<String, String> properties = MessageFormatUtil.getProperties(byteBuffer);
 
             if (properties != null) {
                 String shardingKey = properties.get(MessageConst.PROPERTY_SHARDING_KEY);
@@ -216,10 +150,6 @@ public class MessageShardingKeyUtil {
             return shardingKeyGroups;
         }
 
-        public String getShardingKeyByOffset(Long offset) {
-            return offsetToShardingKey.get(offset);
-        }
-
         @Override
         public String toString() {
             return "MessageShardingInfo{" +
@@ -254,45 +184,6 @@ public class MessageShardingKeyUtil {
 
         public String getShardingKey() {
             return shardingKey;
-        }
-    }
-
-    /**
-     * 消息过滤结果
-     */
-    public static class MessageFilterResult {
-        /**
-         * 可用的消息（按sharding key分组）
-         */
-        private final Map<String, List<MessageInfo>> availableMessagesByShardingKey = new HashMap<>();
-
-        /**
-         * 被阻塞的消息（按sharding key分组）
-         */
-        private final Map<String, List<MessageInfo>> blockedMessagesByShardingKey = new HashMap<>();
-
-        public void addAvailableMessages(String shardingKey, List<MessageInfo> messages) {
-            availableMessagesByShardingKey.put(shardingKey, messages);
-        }
-
-        public void addBlockedMessages(String shardingKey, List<MessageInfo> messages) {
-            blockedMessagesByShardingKey.put(shardingKey, messages);
-        }
-
-        public Map<String, List<MessageInfo>> getAvailableMessagesByShardingKey() {
-            return availableMessagesByShardingKey;
-        }
-
-        public Map<String, List<MessageInfo>> getBlockedMessagesByShardingKey() {
-            return blockedMessagesByShardingKey;
-        }
-
-        public boolean hasAvailableMessages() {
-            return !availableMessagesByShardingKey.isEmpty();
-        }
-
-        public boolean hasBlockedMessages() {
-            return !blockedMessagesByShardingKey.isEmpty();
         }
     }
 }

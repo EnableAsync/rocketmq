@@ -22,8 +22,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.common.OrderedConsumptionLevel;
@@ -52,8 +50,6 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     private final ShardingKeyLockManager lockManager;
     private final ShardingKeyCache cache;
 
-    // 定时清理任务
-    private ScheduledExecutorService cleanupExecutor;
     private volatile boolean started = false;
 
     public ShardingKeyLevelConsumerManager(BrokerController brokerController) {
@@ -80,19 +76,9 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     @Override
     public boolean checkBlock(String attemptId, String topic, String group, int queueId, long invisibleTime) {
         try {
-            // 对于 sharding key 级别，我们总是返回 false，让消息先读取出来
-            // 真正的阻塞逻辑在 update 方法中通过分析 sharding key 来实现
             log.debug("CheckBlock for sharding key level: topic={}, group={}, queueId={}, attemptId={}",
                 topic, group, queueId, attemptId);
-//            return cache.checkBlockAddUnavailableMessages()
-
-            if (cache.checkBlock(topic, group, queueId)) {
-                log.info("QUEUE 中的消息数量已到达上限，开始阻塞: topic={}, group={}, queueId={}", topic, group, queueId);
-                return true;
-            } else {
-                return false;
-            }
-//            return false;
+            return cache.checkBlock(topic, group, queueId);
         } catch (Exception e) {
             log.error("Failed to check block for topic: {}, group: {}, queueId: {}", topic, group, queueId, e);
             return true; // 出错时保守阻塞
@@ -122,7 +108,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             GetMessageResult result = buildGetMessageResultAndCreateLocks(attemptId, popTime, invisibleTime,
                 topic, group, queueId, cachedMessages, orderCountInfoBuilder);
             if (result != null) {
-                log.info("从缓存中成功获取消息: topic={}, group={}, queueId={}, 消息批次数量={}, attemptId={}, offsets={}",
+                log.debug("从缓存中成功获取消息: topic={}, group={}, queueId={}, 消息批次数量={}, attemptId={}, offsets={}",
                     topic, group, queueId, result.getMessageCount(), attemptId, result.getMessageQueueOffset());
             }
             return result;
@@ -139,23 +125,13 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
      */
     private CompletableFuture<GetMessageResult> getMessagesAsync(String topic, String group, int queueId,
         List<Long> offsets) {
-        // 为每个 offset 创建一个异步任务
         List<CompletableFuture<GetMessageResult>> futures = offsets.stream()
             .map(offset -> brokerController.getMessageStore().getMessageAsync(group, topic, queueId, offset, 1, null))
             .collect(Collectors.toList());
-
-        // 用 allOf 等待所有任务完成
-        CompletableFuture<Void> allDoneFuture = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
-
-        // 当所有任务都完成后，处理和合并结果
-        return allDoneFuture.thenApply(v -> {
-            // 因为 allDoneFuture 完成时，可以保证 futures 列表中的所有 future 也都已完成，
-            // 所以这里调用 join() 不会阻塞。
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenApply(v -> {
             List<GetMessageResult> results = futures.stream()
                 .map(CompletableFuture::join)
                 .collect(Collectors.toList());
-
-            // 合并所有 GetMessageResult
             return mergeGetMessageResults(results);
         });
     }
@@ -199,9 +175,6 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             mergedResult.setMaxOffset(maxOffset);
             mergedResult.setNextBeginOffset(nextBeginOffset);
         } else {
-            // 如果一条消息都没找到，设置一个合适的状态
-            // 这里假设如果所有请求都是 NO_MESSAGE_IN_QUEUE，最终结果也是它
-            // 你可以根据业务逻辑选择更精确的状态
             mergedResult.setStatus(results.get(0).getStatus());
             mergedResult.setNextBeginOffset(results.get(results.size() - 1).getNextBeginOffset());
         }
@@ -213,7 +186,8 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
      * 一次遍历完成两个操作，提高性能
      */
     private GetMessageResult buildGetMessageResultAndCreateLocks(String attemptId, long popTime, long invisibleTime,
-        String topic, String group, int queueId, ShardingKeyCache.CachedMessage cachedMessage, StringBuilder orderInfoBuilder) {
+        String topic, String group, int queueId, ShardingKeyCache.CachedMessage cachedMessage,
+        StringBuilder orderInfoBuilder) {
         if (cachedMessage == null) {
             return null;
         }
@@ -224,7 +198,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
         // 过期的消息，需要重新从 store 读取
         // 并且构建 orderCountInfoBuilder
         if (!cachedMessage.getOffsets().isEmpty() && result.getMessageCount() == 0) {
-            log.info("缓存中存在过期消息，从store读取: topic={}, group={}, queueId={}", topic, group, queueId);
+            log.debug("缓存中存在过期消息，从store读取: topic={}, group={}, queueId={}", topic, group, queueId);
             CompletableFuture<GetMessageResult> futureResult = getMessagesAsync(topic, group, queueId, cachedMessage.getOffsets());
             try {
                 // 阻塞当前线程，直到异步操作完成并返回结果
@@ -236,17 +210,12 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
                 return null;
             }
 
-            // 增加重试次数
-            lockManager.increaseCountInfo(topic, group, queueId, cachedMessage.getShardingKey(), cachedMessage.getOffsets());
-
-            // 构建重试次数
-            lockManager.buildCountInfo(topic, group, queueId, cachedMessage.getShardingKey(), cachedMessage.getOffsets(), orderInfoBuilder);
+            lockManager.increaseRetryTimes(topic, group, queueId, cachedMessage.getShardingKey(), cachedMessage.getOffsets());
+            lockManager.buildRetryTimesInfo(topic, group, queueId, cachedMessage.getShardingKey(), cachedMessage.getOffsets(), orderInfoBuilder);
         }
 
-        log.info("构建缓存消息、重试次数并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}",
+        log.debug("构建缓存消息、重试次数并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}",
             topic, group, queueId, result.getMessageCount());
-
-        // 给出去的消息要加锁
         lockManager.createOrUpdateLock(topic, group, queueId, cachedMessage.getShardingKey(),
             popTime, invisibleTime, attemptId, cachedMessage.getOffsets());
 
@@ -281,13 +250,11 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
                 long currentOffset = msgQueueOffsetList.get(i);
 
                 if (lockManager.isLocked(topic, group, queueId, shardingKey, attemptId)) {
-                    // 消息被锁定，加入不可用列表
                     unavailableIndices.add(i);
                     unavailableShardingKeyIndices.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(i);
-                    log.info("消息被锁住: shardingKey={}, offset={}", shardingKey, currentOffset);
+                    log.debug("消息被锁住: shardingKey={}, offset={}", shardingKey, currentOffset);
                 } else {
-                    // 消息可用，加入可用列表
-                    log.info("分发出去的消息: shardingKey={}, offset={}", shardingKey, currentOffset);
+                    log.debug("分发出去的消息: shardingKey={}, offset={}", shardingKey, currentOffset);
                     availableShardingKeyOffsets.computeIfAbsent(shardingKey, k -> new ArrayList<>()).add(currentOffset);
                 }
                 lockManager.updateOffsetToShardingKeyMapping(topic, group, queueId, currentOffset, shardingKey);
@@ -305,7 +272,7 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             getMessageResult.removeIndices(unavailableIndices);
 
             if (getMessageResult.getMessageBufferList().isEmpty()) {
-                log.info("读取到消息，但都被锁定无法分发");
+                log.debug("读取到消息，但都被锁定无法分发");
                 return;
             }
 
@@ -463,40 +430,8 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
         if (started) {
             return;
         }
-
-        try {
-
-//            // 启动定时清理任务
-//            cleanupExecutor = Executors.newSingleThreadScheduledExecutor(
-//                new ThreadFactoryImpl("ShardingKeyLevelConsumerManager_Cleanup_"));
-//
-//            // 每5分钟清理一次过期的 attemptId
-//            cleanupExecutor.scheduleAtFixedRate(() -> {
-//                try {
-//                    if (lockManager != null) {
-//                        lockManager.cleanExpiredAttemptIds();
-//                    }
-//                } catch (Exception e) {
-//                    log.error("Failed to clean expired attempt IDs", e);
-//                }
-//            }, 5, 5, TimeUnit.MINUTES);
-
-            // 每10分钟清理一次过期的缓存消息
-//            cleanupExecutor.scheduleAtFixedRate(() -> {
-//                try {
-//                    if (cache != null) {
-//                        cache.cleanupExpiredMessages();
-//                    }
-//                } catch (Exception e) {
-//                    log.error("Failed to clean expired cache messages", e);
-//                }
-//            }, 10, 10, TimeUnit.MINUTES);
-
-            started = true;
-            log.info("ShardingKeyLevelConsumerManager started successfully");
-        } catch (Exception e) {
-            log.error("Failed to start ShardingKeyLevelConsumerManager", e);
-        }
+        started = true;
+        log.info("ShardingKeyLevelConsumerManager started successfully");
     }
 
     /**
@@ -510,19 +445,6 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
         }
 
         try {
-            // 关闭定时清理任务
-            if (cleanupExecutor != null) {
-                cleanupExecutor.shutdown();
-                try {
-                    if (!cleanupExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-                        cleanupExecutor.shutdownNow();
-                    }
-                } catch (InterruptedException e) {
-                    cleanupExecutor.shutdownNow();
-                    Thread.currentThread().interrupt();
-                }
-            }
-
             // 关闭锁管理器
             if (lockManager != null) {
                 lockManager.shutdown();
@@ -547,14 +469,9 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
     @Override
     public void persist() {
         try {
-            // 简化实现：记录统计信息
             String stats = lockManager.getStatistics();
             log.debug("ShardingKeyLockManager statistics: {}", stats);
 
-            ShardingKeyCache.CacheStatistics cacheStats = cache.getStatistics();
-            log.debug("ShardingKeyCache statistics: {}", cacheStats);
-
-            // 记录重试次数存储统计信息
             String retryStorageStats = lockManager.getRetryStorageStatistics();
             log.debug("ShardingKeyRetryStorage statistics: {}", retryStorageStats);
         } catch (Exception e) {
