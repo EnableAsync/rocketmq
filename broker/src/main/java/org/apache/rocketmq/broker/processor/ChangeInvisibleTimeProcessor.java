@@ -25,7 +25,7 @@ import java.nio.charset.StandardCharsets;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.broker.metrics.PopMetricsManager;
 import org.apache.rocketmq.broker.offset.ConsumerOffsetManager;
-import org.apache.rocketmq.broker.offset.order.OrderlyConsumptionManager;
+import org.apache.rocketmq.broker.offset.order.PopConsumeDeliveryStrategy;
 import org.apache.rocketmq.broker.pop.PopConsumerLockService;
 import org.apache.rocketmq.common.PopAckConstants;
 import org.apache.rocketmq.common.TopicConfig;
@@ -191,7 +191,7 @@ public class ChangeInvisibleTimeProcessor implements NettyRequestProcessor {
         PopConsumerLockService consumerLockService =
             this.brokerController.getPopConsumerService().getConsumerLockService();
         ConsumerOffsetManager consumerOffsetManager = this.brokerController.getConsumerOffsetManager();
-        OrderlyConsumptionManager OrderlyConsumptionManager = brokerController.getConsumerOrderInfoManager();
+        PopConsumeDeliveryStrategy PopConsumeDeliveryStrategy = brokerController.getConsumerOrderInfoManager();
 
         long oldOffset = consumerOffsetManager.queryOffset(groupId, topicId, queueId);
         if (requestHeader.getOffset() < oldOffset) {
@@ -209,7 +209,7 @@ public class ChangeInvisibleTimeProcessor implements NettyRequestProcessor {
             }
 
             long visibilityTimeout = System.currentTimeMillis() + requestHeader.getInvisibleTime();
-            OrderlyConsumptionManager.updateNextVisibleTime(
+            PopConsumeDeliveryStrategy.updateNextVisibleTime(
                 topicId, groupId, queueId, requestHeader.getOffset(), popTime, visibilityTimeout);
 
             responseHeader.setInvisibleTime(visibilityTimeout - popTime);

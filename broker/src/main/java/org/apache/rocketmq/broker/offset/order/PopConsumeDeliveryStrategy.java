@@ -21,14 +21,14 @@ import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.common.OrderedConsumptionLevel;
 import org.apache.rocketmq.store.GetMessageResult;
 
-public class OrderlyConsumptionManager {
+public class PopConsumeDeliveryStrategy {
     private final OrderedConsumptionManager orderedConsumptionManager;
 
-    public OrderlyConsumptionManager() {
+    public PopConsumeDeliveryStrategy() {
         this.orderedConsumptionManager = new QueueLevelConsumerManager();
     }
 
-    public OrderlyConsumptionManager(BrokerController brokerController) {
+    public PopConsumeDeliveryStrategy(BrokerController brokerController) {
         if (brokerController.getBrokerConfig().getOrderedConsumptionLevel() == OrderedConsumptionLevel.SHARDING_KEY) {
             System.out.println("使用 shardingKey 级别的顺序消费");
             this.orderedConsumptionManager = new ShardingKeyLevelConsumerManager(brokerController);

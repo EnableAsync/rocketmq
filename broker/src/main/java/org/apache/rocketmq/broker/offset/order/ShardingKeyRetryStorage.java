@@ -41,7 +41,6 @@ public class ShardingKeyRetryStorage {
     private RocksDB db;
     private Options options;
     private WriteOptions writeOptions;
-    private volatile boolean started = false;
 
     // 内存缓存，减少 RocksDB 读取频率
     private final ConcurrentHashMap<String, Integer> retryTimesCache = new ConcurrentHashMap<>();
@@ -51,10 +50,6 @@ public class ShardingKeyRetryStorage {
     }
 
     public boolean load() {
-        if (started) {
-            return true;
-        }
-
         try {
             UtilAll.ensureDirOK(dbPath);
 
@@ -73,7 +68,6 @@ public class ShardingKeyRetryStorage {
 
             db = RocksDB.open(options, dbPath);
 
-            started = true;
             log.debug("ShardingKeyRetryStorage started successfully, dbPath: {}", dbPath);
             return true;
         } catch (Exception e) {
@@ -83,10 +77,6 @@ public class ShardingKeyRetryStorage {
     }
 
     public void shutdown() {
-        if (!started) {
-            return;
-        }
-
         try {
             if (writeOptions != null) {
                 writeOptions.close();
@@ -99,7 +89,6 @@ public class ShardingKeyRetryStorage {
             }
 
             retryTimesCache.clear();
-            started = false;
             log.debug("ShardingKeyRetryStorage shutdown successfully");
         } catch (Exception e) {
             log.error("Failed to shutdown ShardingKeyRetryStorage", e);
@@ -115,10 +104,6 @@ public class ShardingKeyRetryStorage {
      * 优先从缓存读取，缓存未命中则从 RocksDB 读取
      */
     public int getRetryTimes(String topic, String group, int queueId, String shardingKey) {
-        if (!started) {
-            return 0;
-        }
-
         String key = buildKey(topic, group, queueId, shardingKey);
 
         Integer cachedValue = retryTimesCache.get(key);
@@ -149,10 +134,6 @@ public class ShardingKeyRetryStorage {
      * 同时更新缓存和 RocksDB
      */
     public void setRetryTimes(String topic, String group, int queueId, String shardingKey, int retryTimes) {
-        if (!started) {
-            return;
-        }
-
         String key = buildKey(topic, group, queueId, shardingKey);
 
         try {
@@ -181,10 +162,6 @@ public class ShardingKeyRetryStorage {
      * 在锁完全释放时调用
      */
     public void removeRetryTimes(String topic, String group, int queueId, String shardingKey) {
-        if (!started) {
-            return;
-        }
-
         String key = buildKey(topic, group, queueId, shardingKey);
 
         try {
@@ -209,9 +186,5 @@ public class ShardingKeyRetryStorage {
     public void clearCache() {
         retryTimesCache.clear();
         log.info("ShardingKeyRetryStorage cache cleared");
-    }
-
-    public boolean isStarted() {
-        return started;
     }
 }

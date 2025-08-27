@@ -24,7 +24,7 @@ import java.nio.charset.StandardCharsets;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.broker.metrics.PopMetricsManager;
 import org.apache.rocketmq.broker.offset.ConsumerOffsetManager;
-import org.apache.rocketmq.broker.offset.order.OrderlyConsumptionManager;
+import org.apache.rocketmq.broker.offset.order.PopConsumeDeliveryStrategy;
 import org.apache.rocketmq.broker.pop.PopConsumerLockService;
 import org.apache.rocketmq.common.KeyBuilder;
 import org.apache.rocketmq.common.PopAckConstants;
@@ -431,7 +431,7 @@ public class AckMessageProcessor implements NettyRequestProcessor {
         long invisibleTime, Channel channel, RemotingCommand response) {
 
         ConsumerOffsetManager consumerOffsetManager = this.brokerController.getConsumerOffsetManager();
-        OrderlyConsumptionManager OrderlyConsumptionManager = brokerController.getConsumerOrderInfoManager();
+        PopConsumeDeliveryStrategy PopConsumeDeliveryStrategy = brokerController.getConsumerOrderInfoManager();
         PopConsumerLockService consumerLockService = this.brokerController.getPopConsumerService().getConsumerLockService();
 
         long oldOffset = consumerOffsetManager.queryOffset(consumeGroup, topic, qId);
@@ -452,7 +452,7 @@ public class AckMessageProcessor implements NettyRequestProcessor {
                 return;
             }
 
-            long nextOffset = OrderlyConsumptionManager.commitAndNext(topic, consumeGroup, qId, ackOffset, popTime);
+            long nextOffset = PopConsumeDeliveryStrategy.commitAndNext(topic, consumeGroup, qId, ackOffset, popTime);
             log.debug("顺序消息 ack 完成，ackOffset:{}, nextOffset:{}", ackOffset, nextOffset);
             if (brokerController.getBrokerConfig().isPopConsumerKVServiceLog()) {
                 log.info("PopConsumerService ack orderly, time={}, topicId={}, groupId={}, queueId={}, " +
@@ -464,7 +464,7 @@ public class AckMessageProcessor implements NettyRequestProcessor {
                     String remoteAddress = RemotingHelper.parseSocketAddressAddr(channel.remoteAddress());
                     consumerOffsetManager.commitOffset(remoteAddress, consumeGroup, topic, qId, nextOffset);
                 }
-                if (!OrderlyConsumptionManager.checkBlock(null, topic, consumeGroup, qId, invisibleTime)) {
+                if (!PopConsumeDeliveryStrategy.checkBlock(null, topic, consumeGroup, qId, invisibleTime)) {
                     log.debug("ackOrderlyNew 唤醒长轮询，ackOffset:{}, nextOffset:{}, queueId:{}", ackOffset, nextOffset, qId);
                     this.brokerController.getPopMessageProcessor().notifyMessageArriving(topic, qId, consumeGroup);
                     log.debug("在 ackOrderlyNew 中唤醒所有 queue 的长轮询");

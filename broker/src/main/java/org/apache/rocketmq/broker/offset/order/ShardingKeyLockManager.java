@@ -169,7 +169,8 @@ public class ShardingKeyLockManager {
         return lock.needBlock(attemptId);
     }
 
-    public void increaseRetryTimes(String topic, String group, int queueId, String shardingKeyHash, List<Long> offsets) {
+    public void increaseRetryTimes(String topic, String group, int queueId, String shardingKeyHash,
+        List<Long> offsets) {
         ShardingKeyLock lock = getLock(topic, group, queueId, shardingKeyHash);
         if (lock != null) {
             int newRetryTimes = lock.getRetryTimes() + 1;
@@ -179,7 +180,8 @@ public class ShardingKeyLockManager {
         }
     }
 
-    public void buildRetryTimesInfo(String topic, String group, int queueId, String shardingKeyHash, List<Long> offsets, StringBuilder orderInfoBuilder) {
+    public void buildRetryTimesInfo(String topic, String group, int queueId, String shardingKeyHash, List<Long> offsets,
+        StringBuilder orderInfoBuilder) {
         offsets.forEach(offset -> {
             ShardingKeyLock lock = getLock(topic, group, queueId, shardingKeyHash);
             if (lock != null) {
@@ -196,7 +198,7 @@ public class ShardingKeyLockManager {
 
         String topicGroupKey = MessageShardingKeyUtil.buildTopicGroupIdentifier(topic, group);
 //      String shardingKeyHash = MessageShardingKeyUtil.calculateHashKey(shardingKey);
-//      测试时 hash 用明文
+        // TODO: 测试时 hash 用明文，替换成 hash 值
         String shardingKeyHash = shardingKey;
 
         // 记录attemptId到shardingKey的映射
@@ -562,12 +564,8 @@ public class ShardingKeyLockManager {
      * 获取重试次数存储的统计信息
      */
     public String getRetryStorageStatistics() {
-        if (retryStorage.isStarted()) {
-            return String.format("RetryStorage: cacheSize=%d, started=%s",
-                retryStorage.getCacheSize(), retryStorage.isStarted());
-        } else {
-            return "RetryStorage: disabled";
-        }
+        return String.format("RetryStorage: cacheSize=%d",
+            retryStorage.getCacheSize());
     }
 
     /**
