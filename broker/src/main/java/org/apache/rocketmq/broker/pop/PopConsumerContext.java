@@ -39,8 +39,6 @@ public class PopConsumerContext {
 
     private final String attemptId;
 
-    // 客户端只托管 pop，不知道从哪个 offset 开始拉
-    // pending filter count
     private final AtomicLong restCount;
 
     private final StringBuilder startOffsetInfo;
