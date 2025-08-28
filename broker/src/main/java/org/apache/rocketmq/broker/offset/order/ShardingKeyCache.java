@@ -19,7 +19,7 @@ package org.apache.rocketmq.broker.offset.order;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicLong;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.org.slf4j.Logger;
@@ -41,7 +41,7 @@ public class ShardingKeyCache {
 
     // 可用消息队列，按 topic@group@queueId 分组，里面的都是可用的，不用区分 shardingKey 了
     // 分发出去的时候，根据 shardingKey 加锁就好
-    private final ConcurrentHashMap<String, ConcurrentLinkedQueue<CachedMessage>> availableMessagesMap;
+    private final ConcurrentHashMap<String, ConcurrentLinkedDeque<CachedMessage>> availableMessagesMap;
 
     // 不可用消息缓存：QueueKey -> ShardingKey -> 消息
     private final ConcurrentHashMap<String/*queueKey*/, ConcurrentHashMap<String/*shardingKey*/, CachedMessage>> unavailableMessagesMap;
@@ -129,7 +129,6 @@ public class ShardingKeyCache {
 
     /**
      * 添加可用消息到缓存
-     * ack 的时候添加有消息体的消息
      * 过期的时候添加没有消息体的消息
      *
      * @param topic         主题
@@ -146,11 +145,12 @@ public class ShardingKeyCache {
         }
 
         String queueKey = MessageShardingKeyUtil.buildTopicGroupQueueIdentifier(topic, group, queueId);
-        ConcurrentLinkedQueue<CachedMessage> queue = availableMessagesMap.computeIfAbsent(
-            queueKey, k -> new ConcurrentLinkedQueue<>());
+        ConcurrentLinkedDeque<CachedMessage> queue = availableMessagesMap.computeIfAbsent(
+            queueKey, k -> new ConcurrentLinkedDeque<>());
 
         CachedMessage availableMessage = new CachedMessage(topic, group, queueId, shardingKey, messageResult, offsets);
-        queue.offer(availableMessage);
+        // 过期和 attemptId 的时候加到前面
+        queue.offerFirst(availableMessage);
 
         log.debug("添加可用消息批次到缓存: topic={}, group={}, queueId={}, shardingKey={}, 有内容的消息数量={}, offset={}",
             topic, group, queueId, shardingKey, messageResult.getMessageCount(), offsets);
@@ -230,8 +230,8 @@ public class ShardingKeyCache {
             return false;
         }
 
-        // 将整个消息批次移动到可用队列
-        availableMessagesMap.computeIfAbsent(queueKey, k -> new ConcurrentLinkedQueue<>()).offer(cachedMessage);
+        // 将整个消息批次移动到可用队列最后
+        availableMessagesMap.computeIfAbsent(queueKey, k -> new ConcurrentLinkedDeque<>()).offerLast(cachedMessage);
 
         log.debug("激活消息批次成功: topic={}, group={}, queueId={}, shardingKey={}, 激活消息数量={}, 缓存状态为={}",
             topic, group, queueId, shardingKey, cachedMessage.getOffsets().size(), availableMessagesMap);
@@ -245,7 +245,7 @@ public class ShardingKeyCache {
     public CachedMessage getAvailableMessages(String topic, String group, int queueId, int maxCount) {
         log.debug("shardingKeyCache 从缓存中获取可用消息: topic={}, group={}, queueId={}, 最大获取消息批次数量={}", topic, group, queueId, maxCount);
         String queueKey = MessageShardingKeyUtil.buildTopicGroupQueueIdentifier(topic, group, queueId);
-        ConcurrentLinkedQueue<CachedMessage> queue = availableMessagesMap.get(queueKey);
+        ConcurrentLinkedDeque<CachedMessage> queue = availableMessagesMap.get(queueKey);
 
         if (queue == null || queue.isEmpty()) {
             log.debug("可用消息缓存的 queue 为空: topic={}, group={}, queueId={}", topic, group, queueId);
@@ -253,7 +253,7 @@ public class ShardingKeyCache {
             return null;
         }
 
-        CachedMessage result = queue.poll();
+        CachedMessage result = queue.pollFirst();
 
         if (result != null) {
             totalHits.incrementAndGet();
@@ -273,7 +273,7 @@ public class ShardingKeyCache {
     public void clearQueueCache(String topic, String group, int queueId) {
         String queueKey = MessageShardingKeyUtil.buildTopicGroupQueueIdentifier(topic, group, queueId);
 
-        ConcurrentLinkedQueue<CachedMessage> availableQueue = availableMessagesMap.remove(queueKey);
+        ConcurrentLinkedDeque<CachedMessage> availableQueue = availableMessagesMap.remove(queueKey);
         int removedCount = 0;
         if (availableQueue != null) {
             removedCount += availableQueue.size();

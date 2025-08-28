@@ -191,7 +191,7 @@ public class ChangeInvisibleTimeProcessor implements NettyRequestProcessor {
         PopConsumerLockService consumerLockService =
             this.brokerController.getPopConsumerService().getConsumerLockService();
         ConsumerOffsetManager consumerOffsetManager = this.brokerController.getConsumerOffsetManager();
-        PopConsumeDeliveryStrategy PopConsumeDeliveryStrategy = brokerController.getConsumerOrderInfoManager();
+        PopConsumeDeliveryStrategy popConsumeDeliveryStrategy = brokerController.getConsumerOrderInfoManager();
 
         long oldOffset = consumerOffsetManager.queryOffset(groupId, topicId, queueId);
         if (requestHeader.getOffset() < oldOffset) {
@@ -209,7 +209,7 @@ public class ChangeInvisibleTimeProcessor implements NettyRequestProcessor {
             }
 
             long visibilityTimeout = System.currentTimeMillis() + requestHeader.getInvisibleTime();
-            PopConsumeDeliveryStrategy.updateNextVisibleTime(
+            popConsumeDeliveryStrategy.updateNextVisibleTime(
                 topicId, groupId, queueId, requestHeader.getOffset(), popTime, visibilityTimeout);
 
             responseHeader.setInvisibleTime(visibilityTimeout - popTime);

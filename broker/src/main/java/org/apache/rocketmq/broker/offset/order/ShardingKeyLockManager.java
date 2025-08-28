@@ -176,12 +176,18 @@ public class ShardingKeyLockManager {
             int newRetryTimes = lock.getRetryTimes() + 1;
             lock.setRetryTimes(newRetryTimes);
             retryStorage.setRetryTimes(topic, group, queueId, shardingKeyHash, newRetryTimes);
-            log.debug("重试次数增加: {}, 当前为: {}", shardingKeyHash, newRetryTimes);
+            log.info("重试次数增加: {}, 当前为: {}", shardingKeyHash, newRetryTimes);
         }
     }
 
     public void buildRetryTimesInfo(String topic, String group, int queueId, String shardingKeyHash, List<Long> offsets,
         StringBuilder orderInfoBuilder) {
+//        if (CollectionUtils.isNotEmpty(offsets)) {
+//            ShardingKeyLock lock = getLock(topic, group, queueId, shardingKeyHash);
+//            if (lock != null) {
+//                ExtraInfoUtil.buildQueueOffsetOrderCountInfo(orderInfoBuilder, topic, queueId, offsets.get(0), lock.getRetryTimes());
+//            }
+//        }
         offsets.forEach(offset -> {
             ShardingKeyLock lock = getLock(topic, group, queueId, shardingKeyHash);
             if (lock != null) {
@@ -587,7 +593,7 @@ public class ShardingKeyLockManager {
 
         log.debug("处理重复attemptId，将shardingKey的消息放入可用缓存: {}, offsets: {}", shardingKeyHash, offsets);
 
-        // 创建GetMessageResult，与handleExpiredLock一样处理
+        // 创建GetMessageResult，与handleExpiredLock一样的处理
         GetMessageResult result = new GetMessageResult();
         result.setStatus(GetMessageStatus.FOUND);
         cache.addAvailableMessage(topic, group, queueId, shardingKeyHash, result, new ArrayList<>(offsets));

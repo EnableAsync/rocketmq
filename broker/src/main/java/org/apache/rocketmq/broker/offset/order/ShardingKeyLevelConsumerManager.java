@@ -214,8 +214,8 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             lockManager.buildRetryTimesInfo(topic, group, queueId, cachedMessage.getShardingKey(), cachedMessage.getOffsets(), orderInfoBuilder);
         }
 
-        log.debug("构建缓存消息、重试次数并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}",
-            topic, group, queueId, result.getMessageCount());
+        log.info("构建缓存消息、重试次数并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}, builder={}",
+            topic, group, queueId, result.getMessageCount(), orderInfoBuilder.toString());
         lockManager.createOrUpdateLock(topic, group, queueId, cachedMessage.getShardingKey(),
             popTime, invisibleTime, attemptId, cachedMessage.getOffsets());
 
