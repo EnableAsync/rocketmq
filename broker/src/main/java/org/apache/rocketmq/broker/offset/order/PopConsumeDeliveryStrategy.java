@@ -17,6 +17,7 @@
 package org.apache.rocketmq.broker.offset.order;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.common.OrderedConsumptionLevel;
 import org.apache.rocketmq.store.GetMessageResult;
@@ -76,7 +77,7 @@ public class PopConsumeDeliveryStrategy {
         this.orderedConsumptionManager.shutdown();
     }
 
-    public GetMessageResult getAvailableMessageResult(String attemptId, long popTime, long invisibleTime, String groupId, String topicId, int queueId, int batchSize, StringBuilder orderCountInfoBuilder) {
+    public CompletableFuture<GetMessageResult> getAvailableMessageResult(String attemptId, long popTime, long invisibleTime, String groupId, String topicId, int queueId, int batchSize, StringBuilder orderCountInfoBuilder) {
         return this.orderedConsumptionManager.getAvailableMessageResult(attemptId, popTime, invisibleTime, groupId, topicId, queueId, batchSize, orderCountInfoBuilder);
     }
 }

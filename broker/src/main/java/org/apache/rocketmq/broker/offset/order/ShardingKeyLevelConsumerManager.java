@@ -85,38 +85,89 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
         }
     }
 
+    /**
+     * 获取可用消息结果 - 异步版本
+     */
     @Override
-    public GetMessageResult getAvailableMessageResult(String attemptId, long popTime, long invisibleTime,
+    public CompletableFuture<GetMessageResult> getAvailableMessageResult(String attemptId, long popTime, long invisibleTime,
         String topicId, String groupId, int queueId, int batchSize, StringBuilder orderCountInfoBuilder) {
-        return popMessageFromCache(attemptId, popTime, invisibleTime, topicId, groupId, queueId, batchSize, orderCountInfoBuilder);
+        return popMessageFromCacheAsync(attemptId, popTime, invisibleTime, topicId, groupId, queueId, batchSize, orderCountInfoBuilder);
     }
 
     /**
-     * 优先从缓存中获取可用消息
+     * 优先从缓存中获取可用消息 - 异步版本
      * POP 请求首先调用此方法，如果有缓存消息则直接返回，避免读取存储
      */
-    public GetMessageResult popMessageFromCache(String attemptId, long popTime, long invisibleTime, String topic,
+    public CompletableFuture<GetMessageResult> popMessageFromCacheAsync(String attemptId, long popTime, long invisibleTime, String topic,
         String group, int queueId, int maxCount, StringBuilder orderCountInfoBuilder) {
         try {
             ShardingKeyCache.CachedMessage cachedMessages = cache.getAvailableMessages(topic, group, queueId, maxCount);
             if (cachedMessages == null) {
                 log.debug("缓存中无可用消息: topic={}, group={}, queueId={}", topic, group, queueId);
-                return null;
+                return CompletableFuture.completedFuture(null);
             }
 
             // 合并构建GetMessageResult和创建锁的操作，避免重复遍历
-            GetMessageResult result = buildGetMessageResultAndCreateLocks(attemptId, popTime, invisibleTime,
-                topic, group, queueId, cachedMessages, orderCountInfoBuilder);
-            if (result != null) {
-                log.debug("从缓存中成功获取消息: topic={}, group={}, queueId={}, 消息批次数量={}, attemptId={}, offsets={}",
-                    topic, group, queueId, result.getMessageCount(), attemptId, result.getMessageQueueOffset());
-            }
-            return result;
+            return buildGetMessageResultAndCreateLocksAsync(attemptId, popTime, invisibleTime,
+                topic, group, queueId, cachedMessages, orderCountInfoBuilder)
+                .thenApply(result -> {
+                    if (result != null) {
+                        log.debug("从缓存中成功获取消息: topic={}, group={}, queueId={}, 消息批次数量={}, attemptId={}, offsets={}",
+                            topic, group, queueId, result.getMessageCount(), attemptId, result.getMessageQueueOffset());
+                    }
+                    return result;
+                });
         } catch (Exception e) {
             log.error("从缓存中获取消息失败: topic={}, group={}, queueId={}, attemptId={}",
                 topic, group, queueId, attemptId, e);
-            return null;
+            return CompletableFuture.completedFuture(null);
         }
+    }
+
+    /**
+     * 从缓存消息构建 GetMessageResult 并同时创建锁 - 异步版本
+     * 一次遍历完成两个操作，提高性能
+     */
+    private CompletableFuture<GetMessageResult> buildGetMessageResultAndCreateLocksAsync(String attemptId, long popTime, long invisibleTime,
+        String topic, String group, int queueId, ShardingKeyCache.CachedMessage cachedMessage,
+        StringBuilder orderInfoBuilder) {
+        if (cachedMessage == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        // 因为每个 CachedMessage 代表一批完整的消息，可以直接返回
+        GetMessageResult result = cachedMessage.getMessageResult();
+        result.setStatus(GetMessageStatus.FOUND);
+
+        // 过期的消息，需要重新从 store 读取
+        // 并且构建 orderCountInfoBuilder
+        if (!cachedMessage.getOffsets().isEmpty() && result.getMessageCount() == 0) {
+            log.debug("缓存中存在过期消息，从store读取: topic={}, group={}, queueId={}", topic, group, queueId);
+            return getMessagesAsync(topic, group, queueId, cachedMessage.getOffsets())
+                .thenApply(freshResult -> {
+                    if (freshResult == null) {
+                        log.error("过期消息取数据失败了: {}", cachedMessage.getOffsets());
+                        return null;
+                    }
+
+                    lockManager.increaseRetryTimes(topic, group, queueId, cachedMessage.getShardingKey(), cachedMessage.getOffsets());
+                    lockManager.buildRetryTimesInfo(topic, group, queueId, cachedMessage.getShardingKey(), cachedMessage.getOffsets(), orderInfoBuilder);
+
+                    log.debug("构建缓存消息、重试次数并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}",
+                        topic, group, queueId, freshResult.getMessageCount());
+                    lockManager.createOrUpdateLock(topic, group, queueId, cachedMessage.getShardingKey(),
+                        popTime, invisibleTime, attemptId, cachedMessage.getOffsets());
+
+                    return freshResult;
+                });
+        }
+
+        log.debug("构建缓存消息、重试次数并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}",
+            topic, group, queueId, result.getMessageCount());
+        lockManager.createOrUpdateLock(topic, group, queueId, cachedMessage.getShardingKey(),
+            popTime, invisibleTime, attemptId, cachedMessage.getOffsets());
+
+        return CompletableFuture.completedFuture(result);
     }
 
     /**
@@ -179,47 +230,6 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
             mergedResult.setNextBeginOffset(results.get(results.size() - 1).getNextBeginOffset());
         }
         return mergedResult;
-    }
-
-    /**
-     * 从缓存消息构建 GetMessageResult 并同时创建锁
-     * 一次遍历完成两个操作，提高性能
-     */
-    private GetMessageResult buildGetMessageResultAndCreateLocks(String attemptId, long popTime, long invisibleTime,
-        String topic, String group, int queueId, ShardingKeyCache.CachedMessage cachedMessage,
-        StringBuilder orderInfoBuilder) {
-        if (cachedMessage == null) {
-            return null;
-        }
-
-        // 因为每个 CachedMessage 代表一批完整的消息，可以直接返回
-        GetMessageResult result = cachedMessage.getMessageResult();
-        result.setStatus(GetMessageStatus.FOUND);
-        // 过期的消息，需要重新从 store 读取
-        // 并且构建 orderCountInfoBuilder
-        if (!cachedMessage.getOffsets().isEmpty() && result.getMessageCount() == 0) {
-            log.debug("缓存中存在过期消息，从store读取: topic={}, group={}, queueId={}", topic, group, queueId);
-            CompletableFuture<GetMessageResult> futureResult = getMessagesAsync(topic, group, queueId, cachedMessage.getOffsets());
-            try {
-                // 阻塞当前线程，直到异步操作完成并返回结果
-                result = futureResult.join();
-                // 或者 futureResult.get()，但 join() 不抛出受检异常，更简洁
-            } catch (Exception e) {
-                // 处理可能发生的异常，例如 CompletionException
-                log.error("过期消息取数据失败了: {}", cachedMessage.getOffsets(), e);
-                return null;
-            }
-
-            lockManager.increaseRetryTimes(topic, group, queueId, cachedMessage.getShardingKey(), cachedMessage.getOffsets());
-            lockManager.buildRetryTimesInfo(topic, group, queueId, cachedMessage.getShardingKey(), cachedMessage.getOffsets(), orderInfoBuilder);
-        }
-
-        log.info("构建缓存消息、重试次数并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}, builder={}",
-            topic, group, queueId, result.getMessageCount(), orderInfoBuilder.toString());
-        lockManager.createOrUpdateLock(topic, group, queueId, cachedMessage.getShardingKey(),
-            popTime, invisibleTime, attemptId, cachedMessage.getOffsets());
-
-        return result;
     }
 
     /**

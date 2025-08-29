@@ -1,6 +1,7 @@
 package org.apache.rocketmq.broker.offset.order;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import org.apache.rocketmq.common.OrderedConsumptionLevel;
 import org.apache.rocketmq.store.GetMessageResult;
 
@@ -118,6 +119,6 @@ public interface OrderedConsumptionManager {
      * 获取可用消息结果
      * 用于从缓存中获取消息
      */
-    GetMessageResult getAvailableMessageResult(String attemptId, long popTime, long invisibleTime, String groupId,
+    CompletableFuture<GetMessageResult> getAvailableMessageResult(String attemptId, long popTime, long invisibleTime, String groupId,
         String topicId, int queueId, int batchSize, StringBuilder orderCountInfoBuilder);
 }

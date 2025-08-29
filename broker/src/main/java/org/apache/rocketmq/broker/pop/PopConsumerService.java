@@ -239,7 +239,7 @@ public class PopConsumerService extends ServiceThread {
         String groupId, String topicId, int queueId, long offset, int batchSize, MessageFilter filter) {
 
         log.debug("PopConsumerService getMessageAsync, groupId={}, topicId={}, queueId={}, offset={}, batchSize={}, filter={}",
-            groupId, topicId, offset, queueId, batchSize, filter != null);
+            groupId, topicId, queueId, offset, batchSize, filter != null);
 
         CompletableFuture<GetMessageResult> getMessageFuture =
             brokerController.getMessageStore().getMessageAsync(groupId, topicId, queueId, offset, batchSize, filter);
@@ -293,8 +293,8 @@ public class PopConsumerService extends ServiceThread {
             context.getAttemptId(), topicId, groupId, queueId, context.getInvisibleTime());
     }
 
-    // TODO: 改成全异步的
-    public GetMessageResult getAvailableMessageResult(String attemptId, long popTime, long invisibleTime,
+    // 改成全异步的
+    public CompletableFuture<GetMessageResult> getAvailableMessageResult(String attemptId, long popTime, long invisibleTime,
         String groupId, String topicId, int queueId, int batchSize, StringBuilder orderCountInfoBuilder) {
         return brokerController.getConsumerOrderInfoManager().getAvailableMessageResult(attemptId, popTime, invisibleTime, topicId, groupId, queueId, batchSize, orderCountInfoBuilder);
     }
@@ -315,15 +315,36 @@ public class PopConsumerService extends ServiceThread {
                 return CompletableFuture.completedFuture(result);
             } else {
                 if (result.isFifo()) {
-                    GetMessageResult cacheResult = getAvailableMessageResult(result.getAttemptId(), result.getPopTime(), result.getInvisibleTime(), groupId, topicId, queueId, batchSize, result.getOrderCountInfoBuilder());
-                    if (cacheResult != null) { // 确保 GetMessageResult 拿到的消息是有消息体的
-                        // 不走 store 读取消息，直接从 cache 中取消息
-                        // 这里就不用再走 handleGetMessageResult 去预读和加锁了
-                        // getMinOffset
-                        final long consumeOffset = this.getPopOffset(groupId, topicId, queueId, result.getInitMode());
-                        result.addGetMessageResult(cacheResult, topicId, queueId, retryType, consumeOffset);
-                        return CompletableFuture.completedFuture(result);
-                    }
+                    return getAvailableMessageResult(result.getAttemptId(), result.getPopTime(), result.getInvisibleTime(),
+                        groupId, topicId, queueId, batchSize, result.getOrderCountInfoBuilder())
+                        .thenCompose(cacheResult -> {
+                            if (cacheResult != null) { // 确保 GetMessageResult 拿到的消息是有消息体的
+                                // 不走 store 读取消息，直接从 cache 中取消息
+                                // 这里就不用再走 handleGetMessageResult 去预读和加锁了
+                                // getMinOffset
+                                final long consumeOffset = this.getPopOffset(groupId, topicId, queueId, result.getInitMode());
+                                result.addGetMessageResult(cacheResult, topicId, queueId, retryType, consumeOffset);
+                                return CompletableFuture.completedFuture(result);
+                            }
+
+                            // Current requests would calculate the total number of messages
+                            // waiting to be filtered for new message arrival notifications in
+                            // the long-polling service, need disregarding the backlog in order
+                            // consumption scenario. If rest message num including the blocked
+                            // queue accumulation would lead to frequent unnecessary wake-ups
+                            // of long-polling requests, resulting unnecessary CPU usage.
+                            // When client ack message, long-polling request would be notifications
+                            // by AckMessageProcessor.ackOrderly() and message will not be delayed.
+                            if (isFifoBlocked(result, groupId, topicId, queueId)) {
+                                // should not add accumulation(max offset - consumer offset) here
+                                return CompletableFuture.completedFuture(result);
+                            }
+
+                            final long consumeOffset = this.getPopOffset(groupId, topicId, queueId, result.getInitMode());
+                            return getMessageAsync(clientHost, groupId, topicId, queueId, consumeOffset, remain, filter)
+                                .thenApply(getMessageResult -> handleGetMessageResult(
+                                    result, getMessageResult, topicId, queueId, retryType, consumeOffset));
+                        });
                 }
 
                 // Current requests would calculate the total number of messages

@@ -26,6 +26,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.broker.BrokerPathConfigHelper;
@@ -376,9 +377,9 @@ public class QueueLevelConsumerManager extends ConfigManager implements OrderedC
     }
 
     @Override
-    public GetMessageResult getAvailableMessageResult(String attemptId, long popTime, long invisibleTime,
+    public CompletableFuture<GetMessageResult> getAvailableMessageResult(String attemptId, long popTime, long invisibleTime,
         String groupId, String topicId, int queueId, int batchSize, StringBuilder orderCountInfoBuilder) {
-        return null;
+        return CompletableFuture.completedFuture(null);
     }
 
     @VisibleForTesting
@@ -675,4 +676,3 @@ public class QueueLevelConsumerManager extends ConfigManager implements OrderedC
         }
     }
 }
-
