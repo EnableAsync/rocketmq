@@ -153,23 +153,6 @@ public class MessageShardingKeyUtilTest {
     }
 
     /**
-     * 测试 MessageInfo 内部类
-     */
-    @Test
-    public void testMessageInfo() {
-        Long offset = 1000L;
-        Integer index = 0;
-        String shardingKey = "user123";
-
-        MessageShardingKeyUtil.MessageInfo messageInfo =
-                new MessageShardingKeyUtil.MessageInfo(offset, index, shardingKey);
-
-        assertEquals("offset should match", offset, messageInfo.getOffset());
-        assertEquals("index should match", index, messageInfo.getIndex());
-        assertEquals("sharding key should match", shardingKey, messageInfo.getShardingKey());
-    }
-
-    /**
      * 创建测试用的 MessageExt 对象
      */
     private MessageExt createTestMessage(String topic, String body, Map<String, String> properties) {

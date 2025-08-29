@@ -103,31 +103,4 @@ public class MessageShardingKeyUtil {
     public static String buildShardingKeyIdentifier(String topic, String group, int queueId, String shardingKey) {
         return topic + "@" + group + "@" + queueId + "@" + shardingKey;
     }
-
-    /**
-     * 消息信息
-     */
-    public static class MessageInfo {
-        private final Long offset;
-        private final Integer index;
-        private final String shardingKey;
-
-        public MessageInfo(Long offset, Integer index, String shardingKey) {
-            this.offset = offset;
-            this.index = index;
-            this.shardingKey = shardingKey;
-        }
-
-        public Long getOffset() {
-            return offset;
-        }
-
-        public Integer getIndex() {
-            return index;
-        }
-
-        public String getShardingKey() {
-            return shardingKey;
-        }
-    }
 }

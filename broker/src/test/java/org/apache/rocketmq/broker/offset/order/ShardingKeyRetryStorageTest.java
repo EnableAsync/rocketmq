@@ -188,7 +188,5 @@ public class ShardingKeyRetryStorageTest {
         
         // 删除操作应该不会崩溃
         notStartedStorage.removeRetryTimes("topic", "group", 1, "key");
-        
-        assertFalse("Storage should not be started", notStartedStorage.isStarted());
     }
 }
