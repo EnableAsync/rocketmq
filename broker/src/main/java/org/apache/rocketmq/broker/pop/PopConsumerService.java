@@ -331,15 +331,15 @@ public class PopConsumerService extends ServiceThread {
                     return getAvailableMessageResult(result.getAttemptId(), result.getPopTime(), result.getInvisibleTime(),
                         groupId, topicId, queueId, batchSize, result.getOrderCountInfoBuilder())
                         .thenCompose(cacheResult -> {
-                            if (cacheResult != null) { // 确保 GetMessageResult 拿到的消息是有消息体的
+                            if (cacheResult != null) {
+                                // 确保 GetMessageResult 拿到的消息是有消息体的
                                 // 不走 store 读取消息，直接从 cache 中取消息
                                 // 这里就不用再走 handleGetMessageResult 去预读和加锁了
-                                // getMinOffset
                                 final long consumeOffset = this.getPopOffset(groupId, topicId, queueId, result.getInitMode());
                                 result.addGetMessageResult(cacheResult, topicId, queueId, retryType, consumeOffset);
                                 return CompletableFuture.completedFuture(result);
                             }
-
+                            // 如果可用缓存中没有消息，就从 store 读消息
                             final long consumeOffset = this.getPopOffset(groupId, topicId, queueId, result.getInitMode());
                             return getMessageAsync(clientHost, groupId, topicId, queueId, consumeOffset, remain, filter)
                                 .thenApply(getMessageResult -> handleGetMessageResult(
