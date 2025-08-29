@@ -139,11 +139,11 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
         GetMessageResult result = cachedMessage.getMessageResult();
         result.setStatus(GetMessageStatus.FOUND);
 
+        CompletableFuture<GetMessageResult> messageFuture = CompletableFuture.completedFuture(result);
         // 过期的消息，需要重新从 store 读取
-        // 并且构建 orderCountInfoBuilder
         if (!cachedMessage.getOffsets().isEmpty() && result.getMessageCount() == 0) {
             log.debug("缓存中存在过期消息，从store读取: topic={}, group={}, queueId={}", topic, group, queueId);
-            return getMessagesAsync(topic, group, queueId, cachedMessage.getOffsets())
+            messageFuture = getMessagesAsync(topic, group, queueId, cachedMessage.getOffsets())
                 .thenApply(freshResult -> {
                     if (freshResult == null) {
                         log.error("过期消息取数据失败了: {}", cachedMessage.getOffsets());
@@ -153,21 +153,19 @@ public class ShardingKeyLevelConsumerManager implements OrderedConsumptionManage
                     lockManager.increaseRetryTimes(topic, group, queueId, cachedMessage.getShardingKey(), cachedMessage.getOffsets());
                     lockManager.buildRetryTimesInfo(topic, group, queueId, cachedMessage.getShardingKey(), cachedMessage.getOffsets(), orderInfoBuilder);
 
-                    log.debug("构建缓存消息、重试次数并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}",
-                        topic, group, queueId, freshResult.getMessageCount());
-                    lockManager.createOrUpdateLock(topic, group, queueId, cachedMessage.getShardingKey(),
-                        popTime, invisibleTime, attemptId, cachedMessage.getOffsets());
-
                     return freshResult;
                 });
         }
-
-        log.debug("构建缓存消息、重试次数并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}",
-            topic, group, queueId, result.getMessageCount());
-        lockManager.createOrUpdateLock(topic, group, queueId, cachedMessage.getShardingKey(),
-            popTime, invisibleTime, attemptId, cachedMessage.getOffsets());
-
-        return CompletableFuture.completedFuture(result);
+        // 统一处理锁创建和日志记录
+        return messageFuture.thenApply(finalResult -> {
+            if (finalResult != null) {
+                log.debug("构建缓存消息、重试次数并创建锁: topic={}, group={}, queueId={}, 处理消息批次数量={}",
+                    topic, group, queueId, finalResult.getMessageCount());
+                lockManager.createOrUpdateLock(topic, group, queueId, cachedMessage.getShardingKey(),
+                    popTime, invisibleTime, attemptId, cachedMessage.getOffsets());
+            }
+            return finalResult;
+        });
     }
 
     /**
